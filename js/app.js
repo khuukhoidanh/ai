@@ -52,11 +52,121 @@ $(function () {
       .replace(/'/g, '&#39;');
   }
 
-  function formatInlineMarkdown(escaped) {
+  function formatInlineMarkdown(raw) {
+    const escaped = escapeHtml(raw)
+      .replace(/&lt;br\s*\/?&gt;/gi, '<br>');
     return escaped
       .replace(/`([^`\n]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  }
+
+  function splitTableRow(line) {
+    const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+    return trimmed.split('|').map(function (cell) { return cell.trim(); });
+  }
+
+  function isTableSeparator(line) {
+    return /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?$/.test(line.trim());
+  }
+
+  function renderProseLines(prose) {
+    const lines = prose.split('\n');
+    let html = '';
+    let i = 0;
+
+    while (i < lines.length) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
+      if (!trimmed) {
+        i += 1;
+        continue;
+      }
+
+      if (/^(?:---+|===+|\*\*\*+)$/.test(trimmed)) {
+        html += '<hr>';
+        i += 1;
+        continue;
+      }
+
+      const headingMatch = trimmed.match(/^(#{1,4})\s+(.+)$/);
+      if (headingMatch) {
+        const level = headingMatch[1].length;
+        html += '<h' + level + '>' + formatInlineMarkdown(headingMatch[2]) + '</h' + level + '>';
+        i += 1;
+        continue;
+      }
+
+      if (trimmed.includes('|') && i + 1 < lines.length && isTableSeparator(lines[i + 1])) {
+        const headers = splitTableRow(trimmed);
+        i += 2;
+        const rows = [];
+        while (i < lines.length && lines[i].trim() && lines[i].includes('|')) {
+          rows.push(splitTableRow(lines[i]));
+          i += 1;
+        }
+        html += '<div class="table-wrap"><table><thead><tr>' +
+          headers.map(function (h) { return '<th>' + formatInlineMarkdown(h) + '</th>'; }).join('') +
+          '</tr></thead><tbody>' +
+          rows.map(function (r) {
+            return '<tr>' + headers.map(function (_, idx) {
+              return '<td>' + formatInlineMarkdown(r[idx] || '') + '</td>';
+            }).join('') + '</tr>';
+          }).join('') +
+          '</tbody></table></div>';
+        continue;
+      }
+
+      if (/^>\s?/.test(trimmed)) {
+        const quoteLines = [];
+        while (i < lines.length && /^>\s?/.test(lines[i].trim())) {
+          quoteLines.push(formatInlineMarkdown(lines[i].trim().replace(/^>\s?/, '')));
+          i += 1;
+        }
+        html += '<blockquote>' + quoteLines.join('<br>') + '</blockquote>';
+        continue;
+      }
+
+      if (/^\s*[-*•]\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*[-*•]\s+/.test(lines[i])) {
+          items.push('<li>' + formatInlineMarkdown(lines[i].replace(/^\s*[-*•]\s+/, '')) + '</li>');
+          i += 1;
+        }
+        html += '<ul>' + items.join('') + '</ul>';
+        continue;
+      }
+
+      if (/^\s*\d+\.\s+/.test(line)) {
+        const items = [];
+        while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+          items.push('<li>' + formatInlineMarkdown(lines[i].replace(/^\s*\d+\.\s+/, '')) + '</li>');
+          i += 1;
+        }
+        html += '<ol>' + items.join('') + '</ol>';
+        continue;
+      }
+
+      const paraLines = [];
+      while (
+        i < lines.length &&
+        lines[i].trim() &&
+        !/^(?:---+|===+|\*\*\*+)$/.test(lines[i].trim()) &&
+        !/^#{1,4}\s+/.test(lines[i].trim()) &&
+        !/^>\s?/.test(lines[i].trim()) &&
+        !/^\s*[-*•]\s+/.test(lines[i]) &&
+        !/^\s*\d+\.\s+/.test(lines[i]) &&
+        !(lines[i].includes('|') && i + 1 < lines.length && isTableSeparator(lines[i + 1]))
+      ) {
+        paraLines.push(formatInlineMarkdown(lines[i]));
+        i += 1;
+      }
+      html += '<p>' + paraLines.join('<br>') + '</p>';
+    }
+
+    return html;
   }
 
   function renderMarkdownHtml(rawText) {
@@ -66,28 +176,15 @@ $(function () {
     for (let i = 0; i < segments.length; i += 3) {
       const prose = segments[i] || '';
       if (prose.trim()) {
-        const blocks = prose.split(/\n{2,}/);
-        blocks.forEach(function (block) {
-          const lines = block.split('\n').filter(Boolean);
-          if (!lines.length) return;
-          if (lines.every(function (l) { return /^\s*[-*]\s+/.test(l); })) {
-            html += '<ul>' + lines.map(function (l) {
-              return '<li>' + formatInlineMarkdown(escapeHtml(l.replace(/^\s*[-*]\s+/, ''))) + '</li>';
-            }).join('') + '</ul>';
-          } else if (lines.every(function (l) { return /^\s*\d+\.\s+/.test(l); })) {
-            html += '<ol>' + lines.map(function (l) {
-              return '<li>' + formatInlineMarkdown(escapeHtml(l.replace(/^\s*\d+\.\s+/, ''))) + '</li>';
-            }).join('') + '</ol>';
-          } else {
-            html += '<p>' + lines.map(function (l) {
-              return formatInlineMarkdown(escapeHtml(l));
-            }).join('<br>') + '</p>';
-          }
-        });
+        html += renderProseLines(prose);
       }
       if (i + 2 < segments.length) {
-        const code = segments[i + 2] || '';
-        html += '<pre><code>' + escapeHtml(code.replace(/\n$/, '')) + '</code></pre>';
+        const lang = (segments[i + 1] || 'code').trim();
+        const code = (segments[i + 2] || '').replace(/\n$/, '');
+        html += '<div class="code-block">' +
+          '<div class="code-block-head"><span>' + escapeHtml(lang) + '</span>' +
+          '<button type="button" class="copy-code-btn">Copy</button></div>' +
+          '<pre><code>' + escapeHtml(code) + '</code></pre></div>';
       }
     }
     return html || '<p></p>';
@@ -782,6 +879,15 @@ $(function () {
   $('.close-sidebar, #scrim').on('click', closeMobileNav);
   $('.brand').on('click', function (event) { event.preventDefault(); });
 
+  $('#messages').on('click', '.copy-code-btn', function () {
+    const $btn = $(this);
+    const code = $btn.closest('.code-block').find('code').text();
+    if (!code || !navigator.clipboard) return;
+    navigator.clipboard.writeText(code).then(function () {
+      $btn.text('Copied!');
+      setTimeout(function () { $btn.text('Copy'); }, 1500);
+    }).catch(function () {});
+  });
   $('#message-form').on('submit', function (event) {
     event.preventDefault();
     sendMessage($('#message-input').val());
