@@ -6,14 +6,217 @@ $(function () {
   let loginPending = false;
   let sessionRole = null;
   let historyPrefix = null;
+  let dailyQuotaKey = null;
   let historyWarningShown = false;
-  let discordReady = false;
-  let discordConnecting = false;
-  let discordSaving = false;
-  let discordEpoch = 0;
-  const discordQueue = new Map();
   let adminCheckPending = false;
   const sessionStorageKey = 'chatbot.sessionToken';
+  const MAX_CHAT_STORAGE_BYTES = 4 * 1024 * 1024;
+  const STORAGE_PROMPT_THRESHOLD_BYTES = 3 * 1024 * 1024;
+  const MAX_DAILY_REQUESTS = 200;
+  let isBotResponding = false;
+  let sessionModalMode = 'login-low-space';
+  const OPENROUTER_MODELS = {
+    'auto': { key: 'auto', id: 'openrouter/free', label: 'Auto (Free)', free: true },
+    'gpt-oss-120b': { key: 'gpt-oss-120b', id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b', free: false },
+    'gemini-flash-lite': { key: 'gemini-flash-lite', id: 'google/gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite', free: false },
+    'deepseek-flash': { key: 'deepseek-flash', id: 'deepseek/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash 0731', free: false }
+  };
+  const textEncoder = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null;
+
+  function getSelectedModel() {
+    const key = String($('#model-select').val() || 'auto');
+    const model = OPENROUTER_MODELS[key];
+    if (!model || !model.free) {
+      $('#model-select').val('auto');
+      return OPENROUTER_MODELS['auto'];
+    }
+    return model;
+  }
+
+  function updateSendButtonState() {
+    const hasText = Boolean(($('#message-input').val() || '').trim());
+    $('#send-button')
+      .prop('disabled', !hasText || isBotResponding)
+      .toggleClass('is-responding', isBotResponding)
+      .attr('aria-label', isBotResponding ? 'Bot đang trả lời…' : 'Send message');
+  }
+
+  function escapeHtml(text) {
+    return String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function formatInlineMarkdown(escaped) {
+    return escaped
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  }
+
+  function renderMarkdownHtml(rawText) {
+    const text = String(rawText || '').replace(/\r\n/g, '\n');
+    const segments = text.split(/```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g);
+    let html = '';
+    for (let i = 0; i < segments.length; i += 3) {
+      const prose = segments[i] || '';
+      if (prose.trim()) {
+        const blocks = prose.split(/\n{2,}/);
+        blocks.forEach(function (block) {
+          const lines = block.split('\n').filter(Boolean);
+          if (!lines.length) return;
+          if (lines.every(function (l) { return /^\s*[-*]\s+/.test(l); })) {
+            html += '<ul>' + lines.map(function (l) {
+              return '<li>' + formatInlineMarkdown(escapeHtml(l.replace(/^\s*[-*]\s+/, ''))) + '</li>';
+            }).join('') + '</ul>';
+          } else if (lines.every(function (l) { return /^\s*\d+\.\s+/.test(l); })) {
+            html += '<ol>' + lines.map(function (l) {
+              return '<li>' + formatInlineMarkdown(escapeHtml(l.replace(/^\s*\d+\.\s+/, ''))) + '</li>';
+            }).join('') + '</ol>';
+          } else {
+            html += '<p>' + lines.map(function (l) {
+              return formatInlineMarkdown(escapeHtml(l));
+            }).join('<br>') + '</p>';
+          }
+        });
+      }
+      if (i + 2 < segments.length) {
+        const code = segments[i + 2] || '';
+        html += '<pre><code>' + escapeHtml(code.replace(/\n$/, '')) + '</code></pre>';
+      }
+    }
+    return html || '<p></p>';
+  }
+
+  function getTodayKey() {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return y + '-' + m + '-' + d;
+  }
+
+  function readDailyQuota() {
+    if (!dailyQuotaKey) return 0;
+    try {
+      const raw = localStorage.getItem(dailyQuotaKey);
+      if (!raw) return 0;
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.date === getTodayKey() && Number.isFinite(parsed.count) && parsed.count >= 0) {
+        return Math.floor(parsed.count);
+      }
+    } catch (error) {}
+    return 0;
+  }
+
+  function writeDailyQuota(count) {
+    if (!dailyQuotaKey) return;
+    try {
+      localStorage.setItem(dailyQuotaKey, JSON.stringify({ date: getTodayKey(), count: Math.max(0, Math.floor(count)) }));
+    } catch (error) {}
+  }
+
+  function updateQuotaUI(count) {
+    requestCount = Math.max(0, Math.floor(count));
+    $('#quota-count').text(requestCount + ' / ' + MAX_DAILY_REQUESTS);
+    $('#quota-bar').css('width', Math.min(requestCount / MAX_DAILY_REQUESTS * 100, 100) + '%');
+  }
+
+  function getByteSize(text) {
+    const str = String(text || '');
+    if (textEncoder) return textEncoder.encode(str).length;
+    return unescape(encodeURIComponent(str)).length;
+  }
+
+  function formatBytes(bytes) {
+    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+    return Math.round(bytes / 1024) + ' KB';
+  }
+
+  function getStoredChatStats(prefix) {
+    if (!prefix) return { bytes: 0, chatCount: 0, messageCount: 0 };
+    let bytes = 0;
+    let chatCount = 0;
+    let messageCount = 0;
+    try {
+      const chatKeyPrefix = prefix + 'chat.';
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key || !key.startsWith(prefix)) continue;
+        const val = localStorage.getItem(key) || '';
+        bytes += getByteSize(val);
+        if (key.startsWith(chatKeyPrefix)) {
+          chatCount += 1;
+          try {
+            const parsed = JSON.parse(val);
+            if (parsed && Array.isArray(parsed.messages)) {
+              messageCount += parsed.messages.length;
+            }
+          } catch (e) {}
+        }
+      }
+    } catch (error) {}
+    return { bytes: bytes, chatCount: chatCount, messageCount: messageCount };
+  }
+
+  function updateStorageIndicator() {
+    const stats = getStoredChatStats(historyPrefix);
+    const ratio = stats.bytes / MAX_CHAT_STORAGE_BYTES;
+    const $badge = $('#storage-limit-badge');
+    $badge
+      .text(formatBytes(stats.bytes) + ' / 4 MB')
+      .toggleClass('is-warning', ratio >= 0.8 && ratio < 0.95)
+      .toggleClass('is-full', ratio >= 0.95);
+    return stats;
+  }
+
+  function clearLocalHistory() {
+    if (historyPrefix) {
+      try {
+        const keysToRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith(historyPrefix)) keysToRemove.push(key);
+        }
+        keysToRemove.forEach(function (key) { localStorage.removeItem(key); });
+      } catch (error) {}
+    }
+    conversations.length = 0;
+    activeId = null;
+    updateQuotaUI(readDailyQuota());
+    updateStorageIndicator();
+  }
+
+  function openSessionChoiceModal(mode, stats) {
+    sessionModalMode = mode || 'login-low-space';
+    const usedText = formatBytes(stats.bytes) + ' / 4 MB';
+    if (sessionModalMode === 'new-chat-confirm') {
+      $('#session-choice-title').text('Xoá phiên trò chuyện cũ?');
+      $('#session-choice-desc').html(
+        'Hiện tại chỉ dùng 1 phiên trò chuyện duy nhất (<strong id="session-choice-summary"></strong>). Bạn có muốn xoá toàn bộ đoạn chat cũ để tạo phiên mới không?'
+      );
+      $('#session-choice-summary').text(usedText);
+      $('#session-choice-new').text('Xoá & tạo mới');
+      $('#session-choice-continue').text('Giữ lại phiên cũ');
+    } else {
+      $('#session-choice-title').text('Dung lượng chat sắp đầy');
+      $('#session-choice-desc').html(
+        'Dữ liệu chat đã dùng <strong id="session-choice-summary"></strong> (chỉ còn dưới 1 MB). Bạn muốn tiếp tục bản cũ hay xoá để sang bản mới?'
+      );
+      $('#session-choice-summary').text(stats.chatCount + ' cuộc trò chuyện • ' + usedText);
+      $('#session-choice-new').text('Sang bản mới');
+      $('#session-choice-continue').text('Tiếp tục bản cũ');
+    }
+    $('#session-choice-modal').removeClass('is-hidden');
+    $('#session-choice-continue').trigger('focus');
+  }
+
+  function closeSessionChoiceModal() {
+    $('#session-choice-modal').addClass('is-hidden');
+  }
 
   function readSavedSession() {
     try { return window.localStorage.getItem(sessionStorageKey); }
@@ -38,124 +241,47 @@ $(function () {
     $('#login-view').addClass('is-hidden');
     $('#chat-view').removeClass('is-hidden');
     historyPrefix = 'chatbot.history.' + encodeURIComponent(user.username.trim().toLowerCase()) + '.';
+    dailyQuotaKey = 'chatbot.dailyQuota.' + encodeURIComponent(user.username.trim().toLowerCase());
     historyWarningShown = false;
-    loadHistory();
-    connectDiscord();
+    updateQuotaUI(readDailyQuota());
+    updateSendButtonState();
+    const stats = getStoredChatStats(historyPrefix);
+    if (stats.bytes >= STORAGE_PROMPT_THRESHOLD_BYTES) {
+      updateStorageIndicator();
+      renderHistory();
+      renderMessages();
+      openSessionChoiceModal('login-low-space', stats);
+    } else {
+      loadHistory();
+    }
   }
 
-  function saveConversation(conversation, localOnly) {
-    if (!historyPrefix || !conversation) return;
+  function saveConversation(conversation) {
+    if (!historyPrefix || !conversation) return false;
     conversation.messages.forEach(function (message) {
       if (!message.id) message.id = crypto.randomUUID();
       if (!Number.isFinite(message.createdAt)) message.createdAt = conversation.createdAt || Date.now();
     });
+    const chatKey = historyPrefix + 'chat.' + conversation.id;
+    const serialized = JSON.stringify(conversation);
+    const activeValue = String(activeId || '');
     try {
-      localStorage.setItem(historyPrefix + 'chat.' + conversation.id, JSON.stringify(conversation));
-      localStorage.setItem(historyPrefix + 'active', String(activeId));
+      const currentStats = getStoredChatStats(historyPrefix);
+      const prevChatBytes = getByteSize(localStorage.getItem(chatKey) || '');
+      const prevActiveBytes = getByteSize(localStorage.getItem(historyPrefix + 'active') || '');
+      const projectedBytes = currentStats.bytes - prevChatBytes - prevActiveBytes + getByteSize(serialized) + getByteSize(activeValue);
+      if (projectedBytes > MAX_CHAT_STORAGE_BYTES) {
+        notify('Đã đạt giới hạn 4 MB dữ liệu chat trên trình duyệt. Vui lòng tạo bản mới để tiếp tục.', 'error');
+        return false;
+      }
+      localStorage.setItem(chatKey, serialized);
+      localStorage.setItem(historyPrefix + 'active', activeValue);
+      updateStorageIndicator();
+      return true;
     } catch (error) {
       if (!historyWarningShown) notify('Không lưu được lịch sử trên trình duyệt. Dung lượng có thể đã đầy hoặc quyền lưu trữ bị chặn.', 'error');
       historyWarningShown = true;
-    }
-    if (!localOnly && discordReady && !conversation.cloudLoading) {
-      discordQueue.set(conversation.id, conversation);
-      flushDiscord();
-    }
-  }
-
-  async function flushDiscord() {
-    if (discordSaving || !discordReady || !sessionToken) return;
-    const epoch = discordEpoch, token = sessionToken;
-    discordSaving = true;
-    $('#history-sync-status').text('Đang lưu lên Discord…');
-    try {
-      while (discordQueue.size && epoch === discordEpoch) {
-        const [id, chat] = discordQueue.entries().next().value;
-        discordQueue.delete(id);
-        const snapshot = { id: chat.id, title: chat.title, messages: chat.messages.slice() };
-        try {
-          for (let offset = 0; offset < Math.max(1, snapshot.messages.length); offset += 100) {
-            let result;
-            do {
-              result = await window.authApi.discordSave(token, Object.assign({}, snapshot, { messages: snapshot.messages.slice(offset, offset + 100) }));
-              if (epoch !== discordEpoch) return;
-              if (!result.ok) throw new Error(result.message || 'Backend chưa hỗ trợ đồng bộ Discord.');
-            } while (result.remaining > 0);
-          }
-        } catch (error) {
-          if (epoch === discordEpoch) discordQueue.set(id, chat);
-          throw error;
-        }
-      }
-      if (epoch === discordEpoch) $('#history-sync-status').text('Đã đồng bộ Discord');
-    } catch (error) {
-      if (epoch === discordEpoch) {
-        $('#history-sync-status').text('Chưa đồng bộ · bấm thử lại');
-        notify(error.message, 'error');
-      }
-    } finally { if (epoch === discordEpoch) discordSaving = false; }
-  }
-
-  async function readDiscordChat(chat) {
-    if (!chat.cloudPending || chat.cloudLoading || !discordReady) return;
-    const token = sessionToken, epoch = discordEpoch;
-    chat.cloudLoading = true;
-    $('#history-sync-status').text('Đang tải nội dung chat…');
-    try {
-      let before = null;
-      const messages = new Map(chat.messages.map(message => [message.id, message]));
-      do {
-        const result = await window.authApi.discordLoad(token, chat.id, before);
-        if (epoch !== discordEpoch) return;
-        if (!result.ok) throw new Error(result.message || 'Không tải được lịch sử Discord.');
-        result.messages.forEach(message => messages.set(message.id, message));
-        before = result.before;
-      } while (before);
-      chat.messages = Array.from(messages.values()).sort((a, b) => a.createdAt - b.createdAt);
-      chat.cloudPending = false;
-      chat.cloudLoading = false;
-      saveConversation(chat, true);
-      if (activeId === chat.id) renderMessages();
-      $('#history-sync-status').text('Đã tải lịch sử Discord');
-    } catch (error) {
-      if (epoch === discordEpoch) {
-        $('#history-sync-status').text('Chưa tải xong · bấm thử lại');
-        notify(error.message, 'error');
-      }
-    } finally { chat.cloudLoading = false; }
-  }
-
-  async function connectDiscord() {
-    if (!sessionToken || discordConnecting || discordSaving) return;
-    const token = sessionToken, epoch = discordEpoch;
-    discordConnecting = true;
-    $('#history-sync-retry').prop('disabled', true);
-    $('#history-sync-status').text('Đang kết nối Discord…');
-    try {
-      const result = await window.authApi.discordList(token);
-      if (epoch !== discordEpoch) return;
-      if (!result.ok || !Array.isArray(result.chats)) throw new Error(result.message || 'Cần cập nhật backend Discord.');
-      discordReady = true;
-      const local = conversations.slice();
-      result.chats.forEach(function (remote) {
-        const existing = conversations.find(chat => chat.id === remote.id);
-        if (existing) existing.cloudPending = true;
-        else conversations.push(Object.assign({}, remote, { messages: [], cloudPending: true }));
-      });
-      renderHistory();
-      if (activeConversation()) await readDiscordChat(activeConversation());
-      if (epoch !== discordEpoch) return;
-      local.forEach(chat => { saveConversation(chat, true); discordQueue.set(chat.id, chat); });
-      await flushDiscord();
-    } catch (error) {
-      if (epoch === discordEpoch) {
-        $('#history-sync-status').text('Chỉ lưu cục bộ · thử lại');
-        notify(error.message, 'info');
-      }
-    } finally {
-      if (epoch === discordEpoch) {
-        discordConnecting = false;
-        $('#history-sync-retry').prop('disabled', false);
-      }
+      return false;
     }
   }
 
@@ -182,10 +308,12 @@ $(function () {
       notify('Không đọc được lịch sử đã lưu trên trình duyệt.', 'info');
     }
     if (!activeConversation()) activeId = conversations.length ? conversations[0].id : null;
-    requestCount = conversations.reduce((total, chat) => total + chat.messages.filter(message =>
+    const todayMessages = conversations.reduce((total, chat) => total + chat.messages.filter(message =>
       message.role === 'user' && message.createdAt && new Date(message.createdAt).toDateString() === new Date().toDateString()).length, 0);
-    $('#quota-count').text(requestCount + ' / 200');
-    $('#quota-bar').css('width', Math.min(requestCount / 200 * 100, 100) + '%');
+    const syncedCount = Math.max(readDailyQuota(), todayMessages);
+    writeDailyQuota(syncedCount);
+    updateQuotaUI(syncedCount);
+    updateStorageIndicator();
     if (!conversations.length) newConversation();
     else { renderHistory(); renderMessages(); }
   }
@@ -264,7 +392,6 @@ $(function () {
         try { localStorage.setItem(historyPrefix + 'active', String(activeId)); } catch (error) {}
         renderHistory();
         renderMessages();
-        readDiscordChat(conversation);
         closeMobileNav();
       });
       (conversation.yesterday ? $yesterday : $recent).append($item);
@@ -274,10 +401,6 @@ $(function () {
   function renderMessages() {
     const $messages = $('#messages').empty();
     const conversation = activeConversation();
-    if (conversation && conversation.cloudPending && !conversation.messages.length) {
-      $messages.append($('<p>').text('Đang tải lịch sử từ Discord. Nếu chưa tải được, bấm nút đồng bộ ở thanh bên.'));
-      return;
-    }
     if (!conversation || conversation.messages.length === 0) {
       $messages.append(
         '<section class="welcome" id="welcome">' +
@@ -290,11 +413,18 @@ $(function () {
 
     conversation.messages.forEach(function (message) {
       const $row = $('<article>', { class: 'message-row ' + message.role });
-      const $bubble = $('<div>', { class: 'message-bubble' }).text(message.text);
+      const $bubble = $('<div>', { class: 'message-bubble' });
       if (message.role === 'assistant') {
+        if (message.streaming && !message.text) {
+          $bubble.append('<div class="typing-dots" aria-label="Đang trả lời"><span></span><span></span><span></span></div>');
+        } else {
+          $('<div>', { class: 'message-content' }).html(renderMarkdownHtml(message.text)).appendTo($bubble);
+        }
         $('<div>', { class: 'reply-note' })
-          .text('Preview only — AI service is not connected.')
+          .text(message.model || 'Auto (Free)')
           .appendTo($bubble);
+      } else {
+        $bubble.text(message.text);
       }
       $row.append($bubble);
       $messages.append($row);
@@ -308,7 +438,7 @@ $(function () {
 
   function newConversation() {
     if (!sessionToken) return;
-    const empty = conversations.find(chat => chat.messages.length === 0 && !chat.cloudPending);
+    const empty = conversations.find(chat => chat.messages.length === 0);
     if (empty) {
       activeId = empty.id;
       saveConversation(empty);
@@ -335,31 +465,131 @@ $(function () {
     $('#message-input').trigger('focus');
   }
 
-  function sendMessage(text) {
+  function animateSmoothReply(conversation, assistantMessage, fullText) {
+    return new Promise(function (resolve) {
+      const target = String(fullText || '');
+      if (!target) {
+        resolve();
+        return;
+      }
+      const step = Math.max(3, Math.ceil(target.length / 80));
+      let cursor = 0;
+      const $messagesEl = $('#messages');
+
+      function tick() {
+        cursor = Math.min(target.length, cursor + step);
+        assistantMessage.text = target.slice(0, cursor);
+        if (activeId === conversation.id) {
+          const $lastBubble = $messagesEl.find('.message-row.assistant:last .message-bubble');
+          if ($lastBubble.length) {
+            let $content = $lastBubble.find('.message-content');
+            if (!$content.length) {
+              $lastBubble.find('.typing-dots').remove();
+              $content = $('<div>', { class: 'message-content' }).prependTo($lastBubble);
+            }
+            $content.html(renderMarkdownHtml(assistantMessage.text));
+            $messagesEl.scrollTop($messagesEl[0].scrollHeight);
+          }
+        }
+        if (cursor < target.length) {
+          window.requestAnimationFrame(tick);
+        } else {
+          resolve();
+        }
+      }
+
+      window.requestAnimationFrame(tick);
+    });
+  }
+
+  async function sendMessage(text) {
     const content = (text || '').trim();
     if (!content || !sessionToken) return;
+    if (isBotResponding) {
+      notify('Bot đang trả lời, vui lòng đợi phản hồi xong trước khi gửi tin mới.', 'info');
+      return;
+    }
+    const currentQuota = readDailyQuota();
+    if (currentQuota >= MAX_DAILY_REQUESTS) {
+      updateQuotaUI(currentQuota);
+      notify('Bạn đã dùng hết 200 lượt hỏi trong ngày hôm nay. Vui lòng quay lại vào ngày mai.', 'error');
+      return;
+    }
+
+    const model = getSelectedModel();
     if (!activeConversation()) newConversation();
     const conversation = activeConversation();
     if (!conversation) return;
-    if (conversation.cloudPending || conversation.cloudLoading) { notify('Vui lòng tải xong lịch sử trước khi gửi tin nhắn.', 'info'); return; }
 
-    conversation.messages.push({ role: 'user', text: content, createdAt: Date.now() });
-    if (conversation.messages.length === 1) {
+    const prevLength = conversation.messages.length;
+    const prevTitle = conversation.title;
+    const prevUpdatedAt = conversation.updatedAt;
+    const userMessage = { id: crypto.randomUUID(), role: 'user', text: content, createdAt: Date.now() };
+    conversation.messages.push(userMessage);
+    if (prevLength === 0) {
       conversation.title = content.length > 34 ? content.slice(0, 34).trim() + '…' : content;
     }
-    conversation.messages.push({
-      role: 'assistant',
-      text: 'Your message is ready. Connect the backend to receive an AI response.'
-    });
-    requestCount += 1;
     conversation.updatedAt = Date.now();
-    saveConversation(conversation);
-    $('#quota-count').text(requestCount + ' / 200');
-    $('#quota-bar').css('width', Math.min(requestCount / 200 * 100, 100) + '%');
+    if (!saveConversation(conversation)) {
+      conversation.messages.length = prevLength;
+      conversation.title = prevTitle;
+      conversation.updatedAt = prevUpdatedAt;
+      return;
+    }
+
+    const apiMessages = conversation.messages.slice(-20).map(function (m) {
+      return { role: m.role, content: m.text };
+    });
+
+    const assistantMessage = {
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      text: '',
+      model: model.label,
+      streaming: true,
+      createdAt: Date.now()
+    };
+    conversation.messages.push(assistantMessage);
+
+    isBotResponding = true;
     $('#message-input').val('').css('height', '25px');
-    $('#send-button').prop('disabled', true);
+    updateSendButtonState();
     renderHistory();
     renderMessages();
+
+    try {
+      const result = await window.authApi.aiChat(sessionToken, model.key, apiMessages);
+      if (!result || !result.ok) {
+        throw new Error((result && result.message) || 'Không thể nhận phản hồi từ OpenRouter.');
+      }
+
+      const finalReply = String(result.reply || '').trim() || '(Bot không trả về nội dung.)';
+      if (result.model) assistantMessage.model = result.model;
+      await animateSmoothReply(conversation, assistantMessage, finalReply);
+
+      assistantMessage.text = finalReply;
+      delete assistantMessage.streaming;
+      conversation.updatedAt = Date.now();
+
+      if (!saveConversation(conversation)) {
+        conversation.messages.pop();
+        renderMessages();
+        return;
+      }
+
+      const nextQuota = Math.max(readDailyQuota() + 1, Number(result.dailyUsed) || 0);
+      writeDailyQuota(nextQuota);
+      updateQuotaUI(nextQuota);
+      renderHistory();
+      renderMessages();
+    } catch (error) {
+      conversation.messages.pop();
+      renderMessages();
+      notify(error && error.message ? error.message : 'Không thể nhận phản hồi từ OpenRouter.', 'error');
+    } finally {
+      isBotResponding = false;
+      updateSendButtonState();
+    }
   }
 
   $('#login-form').on('submit', function (event) {
@@ -432,14 +662,12 @@ $(function () {
     saveSession(null);
     sessionToken = null;
     sessionRole = null;
-    discordEpoch++;
-    discordReady = false;
-    discordConnecting = false;
-    discordSaving = false;
-    discordQueue.clear();
-    $('#history-sync-retry').prop('disabled', false);
-    $('#history-sync-status').text('Lịch sử trên trình duyệt');
+    isBotResponding = false;
+    closeSessionChoiceModal();
+    $('#history-sync-status').text('Lưu trên trình duyệt (tối đa 4 MB)');
+    $('#storage-limit-badge').text('0 KB / 4 MB').removeClass('is-warning is-full');
     historyPrefix = null;
+    dailyQuotaKey = null;
     window.adminPanel.clear();
     $('#account-role').text('Standard');
     $('#admin-view, #open-admin').addClass('is-hidden');
@@ -514,7 +742,23 @@ $(function () {
     $('#open-admin').trigger('focus');
   });
 
-  $('#new-chat').on('click', newConversation);
+  function requestNewChat() {
+    if (!sessionToken) return;
+    if (isBotResponding) {
+      notify('Bot đang trả lời, vui lòng đợi xong trước khi tạo phiên mới.', 'info');
+      return;
+    }
+    const stats = getStoredChatStats(historyPrefix);
+    const hasMessages = stats.messageCount > 0 || conversations.some(function (c) { return c.messages.length > 0; });
+    if (hasMessages) {
+      openSessionChoiceModal('new-chat-confirm', stats);
+    } else {
+      closeMobileNav();
+      $('#message-input').trigger('focus');
+    }
+  }
+
+  $('#new-chat').on('click', requestNewChat);
   $('.collapse-sidebar').on('click', function () {
     $('body').toggleClass('sidebar-collapsed');
   });
@@ -531,25 +775,51 @@ $(function () {
   $('#message-input').on('input', function () {
     this.style.height = '25px';
     this.style.height = Math.min(this.scrollHeight, 150) + 'px';
-    $('#send-button').prop('disabled', !this.value.trim());
+    updateSendButtonState();
   }).on('keydown', function (event) {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
+      if (isBotResponding) {
+        notify('Bot đang trả lời, bạn vẫn có thể nhập tiếp nhưng chưa thể gửi.', 'info');
+        return;
+      }
       $('#message-form').trigger('submit');
     }
   });
   $('#model-select').on('change', function () {
-    const group = $(this).find(':selected').closest('optgroup').attr('label');
-    notify(group === 'Free'
-      ? 'Model selected. AI is not connected in this preview.'
-      : 'This model may have usage limits or cost. No request was sent.');
+    const key = String($(this).val() || '');
+    const selected = OPENROUTER_MODELS[key];
+    if (!selected || !selected.free) {
+      $(this).val('auto');
+      notify('Model trả phí đang bị khoá. Chỉ có thể dùng chế độ Auto miễn phí.', 'info');
+      return;
+    }
+    notify('Đã chọn model: ' + selected.label, 'info');
   });
   $(document).on('keydown', function (event) {
-    if (event.key === 'Escape') closeMobileNav();
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && !$('#chat-view').hasClass('is-hidden')) {
-      event.preventDefault();
-      newConversation();
+    if (event.key === 'Escape') {
+      closeMobileNav();
+      if (!$('#session-choice-modal').hasClass('is-hidden')) {
+        $('#session-choice-continue').trigger('click');
+      }
     }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k' && !$('#chat-view').hasClass('is-hidden') && $('#session-choice-modal').hasClass('is-hidden')) {
+      event.preventDefault();
+      requestNewChat();
+    }
+  });
+  $('#session-choice-continue').on('click', function () {
+    const mode = sessionModalMode;
+    closeSessionChoiceModal();
+    if (mode === 'login-low-space') {
+      loadHistory();
+    }
+  });
+  $('#session-choice-new').on('click', function () {
+    closeSessionChoiceModal();
+    clearLocalHistory();
+    newConversation();
+    notify('Đã xoá dữ liệu cũ và tạo cuộc trò chuyện mới.', 'info');
   });
   window.addEventListener('storage', function (event) {
     if ((event.key === sessionStorageKey || event.key === null) && !readSavedSession() && sessionToken) {
@@ -557,7 +827,6 @@ $(function () {
     }
   });
   $('#session-retry').on('click', restoreSession);
-  $('#history-sync-retry').on('click', connectDiscord);
   $('#session-login').on('click', function () {
     saveSession(null);
     document.documentElement.classList.remove('restoring-session');

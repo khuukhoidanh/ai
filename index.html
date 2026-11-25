@@ -14,7 +14,7 @@
     } catch (error) {}
   </script>
   <link rel="stylesheet" href="kits/all.min.css">
-  <link rel="stylesheet" href="style.css?v=discord-2">
+  <link rel="stylesheet" href="style.css?v=local-1">
   <link rel="stylesheet" href="admin.css?v=20261125-3">
 </head>
 <body>
@@ -61,7 +61,7 @@
       <nav id="recent-list" class="history-list" aria-label="Recent conversations"></nav>
       <nav id="yesterday-list" class="history-list" aria-label="Yesterday's conversations"></nav>
       <div class="sidebar-footer">
-        <div class="history-sync"><span id="history-sync-status" role="status">Lịch sử trên trình duyệt</span><button id="history-sync-retry" type="button" title="Đồng bộ lịch sử với Discord" aria-label="Đồng bộ lịch sử với Discord"><i class="fa-solid fa-rotate" aria-hidden="true"></i></button></div>
+        <div class="history-sync"><span id="history-sync-status" role="status">Lưu trên trình duyệt (tối đa 4 MB)</span></div>
         <div class="quota"><span>Daily requests</span><span id="quota-count">0 / 200</span></div>
         <div class="quota-track"><span id="quota-bar"></span></div>
         <div class="account">
@@ -93,20 +93,21 @@
           <label class="sr-only" for="message-input">Write a message</label>
           <textarea id="message-input" rows="1" maxlength="4000" placeholder="Ask anything, or dream up something new..."></textarea>
           <div class="composer-controls">
-            <button class="attach-button" type="button" aria-label="Attachments are not available in preview"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
+            <div class="composer-left">
+              <button class="attach-button" type="button" aria-label="Attachments are not available in preview"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
+              <span id="storage-limit-badge" class="storage-limit" title="Giới hạn dữ liệu chat lưu trên trình duyệt: tối đa 4 MB">0 KB / 4 MB</span>
+            </div>
             <div class="composer-actions">
-              <span class="preview-label">Preview</span>
               <div class="model-select-wrap">
                 <label class="sr-only" for="model-select">Choose an AI model</label>
                 <select id="model-select" class="model-select" aria-label="Choose an AI model">
-                  <optgroup label="Free">
-                    <option value="gemma-26b">Gemma 4 26B A4B</option>
-                    <option value="gemma-31b">Gemma 4 31B</option>
+                  <optgroup label="Miễn phí (Free)">
+                    <option value="auto">Auto (Free)</option>
                   </optgroup>
-                  <optgroup label="Limited / paid">
-                    <option value="gpt-oss-120b">gpt-oss-120b</option>
-                    <option value="gemini-flash-lite">Gemini 2.5 Flash Lite</option>
-                    <option value="deepseek-flash">DeepSeek V4 Flash 0731</option>
+                  <optgroup label="Trả phí (Đã khoá)">
+                    <option value="gpt-oss-120b" disabled>🔒 gpt-oss-120b (Đã khoá)</option>
+                    <option value="gemini-flash-lite" disabled>🔒 Gemini 2.5 Flash Lite (Đã khoá)</option>
+                    <option value="deepseek-flash" disabled>🔒 DeepSeek V4 Flash 0731 (Đã khoá)</option>
                   </optgroup>
                 </select>
                 <i class="fa-solid fa-chevron-down model-select-arrow" aria-hidden="true"></i>
@@ -195,12 +196,22 @@
       <section id="admin-audit-section" class="admin-panel admin-section is-hidden" data-admin-page="admin-audit-section"><h2>Nhật ký quản trị</h2><p>50 thao tác gần nhất. Không lưu mật khẩu trong nhật ký.</p><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Thời gian</th><th>Admin</th><th>Thao tác</th><th>Tài khoản</th></tr></thead><tbody id="admin-audit-body"></tbody></table></div></section>
     </div>
   </main>
+  <div id="session-choice-modal" class="session-choice-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="session-choice-title" aria-describedby="session-choice-desc">
+    <div class="session-choice-card">
+      <h2 id="session-choice-title">Tiếp tục phiên trò chuyện?</h2>
+      <p id="session-choice-desc">Bạn có dữ liệu chat đã lưu trên trình duyệt (<strong id="session-choice-summary">0 cuộc trò chuyện</strong>). Bạn muốn tiếp tục bản cũ hay xoá để sang bản mới?</p>
+      <div class="session-choice-actions">
+        <button id="session-choice-new" class="session-choice-btn session-choice-btn--secondary" type="button">Sang bản mới</button>
+        <button id="session-choice-continue" class="session-choice-btn session-choice-btn--primary" type="button">Tiếp tục bản cũ</button>
+      </div>
+    </div>
+  </div>
   <div id="toast" class="toast app-notification" role="status" aria-live="polite" aria-atomic="true"></div>
   <script src="kits/jquery-4.0.0.slim.min.js"></script>
   <script src="js/notifications.js"></script>
   <script src="js/config.js"></script>
-  <script src="js/api.js?v=discord-1"></script>
+  <script src="js/api.js?v=local-1"></script>
   <script src="js/admin.js?v=20261125-3"></script>
-  <script src="js/app.js?v=discord-1"></script>
+  <script src="js/app.js?v=local-1"></script>
 </body>
 </html>
