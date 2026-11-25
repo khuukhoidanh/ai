@@ -1,20 +1,16 @@
 $(function () {
   const conversations = [];
   let activeId = null;
-  let requestCount = 0;
   let sessionToken = null;
   let loginPending = false;
   let sessionRole = null;
   let historyPrefix = null;
-  let dailyQuotaKey = null;
   let historyWarningShown = false;
   let adminCheckPending = false;
   const sessionStorageKey = 'chatbot.sessionToken';
   const MAX_CHAT_STORAGE_BYTES = 4 * 1024 * 1024;
   const STORAGE_PROMPT_THRESHOLD_BYTES = 3 * 1024 * 1024;
-  let maxDailyRequests = (window.APP_CONFIG && Number(window.APP_CONFIG.dailyRequestLimit) > 0)
-    ? Math.floor(Number(window.APP_CONFIG.dailyRequestLimit))
-    : 200;
+  let quotaState = { loaded: false, used: 0, limit: 0 };
   let isBotResponding = false;
   let sessionModalMode = 'login-low-space';
   const OPENROUTER_MODELS = {
@@ -190,38 +186,53 @@ $(function () {
     return html || '<p></p>';
   }
 
-  function getTodayKey() {
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const d = String(now.getDate()).padStart(2, '0');
-    return y + '-' + m + '-' + d;
-  }
-
-  function readDailyQuota() {
-    if (!dailyQuotaKey) return 0;
+  function clearLegacyLocalQuota() {
     try {
-      const raw = localStorage.getItem(dailyQuotaKey);
-      if (!raw) return 0;
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.date === getTodayKey() && Number.isFinite(parsed.count) && parsed.count >= 0) {
-        return Math.floor(parsed.count);
+      const legacyKeys = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('chatbot.dailyQuota.')) legacyKeys.push(key);
       }
+      legacyKeys.forEach(function (key) { localStorage.removeItem(key); });
     } catch (error) {}
-    return 0;
   }
 
-  function writeDailyQuota(count) {
-    if (!dailyQuotaKey) return;
+  function setQuotaFromServer(used, limit) {
+    const parsedUsed = Number(used);
+    const parsedLimit = Number(limit);
+    if (!Number.isFinite(parsedUsed) || parsedUsed < 0 || !Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+      setQuotaUnverified();
+      return;
+    }
+    quotaState = {
+      loaded: true,
+      used: Math.floor(parsedUsed),
+      limit: Math.floor(parsedLimit)
+    };
+    $('#quota-count').text(quotaState.used + ' / ' + quotaState.limit);
+    $('#quota-bar').css('width', Math.min(quotaState.used / quotaState.limit * 100, 100) + '%');
+  }
+
+  function setQuotaUnverified(label) {
+    quotaState = { loaded: false, used: 0, limit: 0 };
+    $('#quota-count').text(label || 'Chưa tải được');
+    $('#quota-bar').css('width', '0%');
+  }
+
+  async function refreshQuotaFromServer() {
+    if (!sessionToken) return;
+    const token = sessionToken;
     try {
-      localStorage.setItem(dailyQuotaKey, JSON.stringify({ date: getTodayKey(), count: Math.max(0, Math.floor(count)) }));
-    } catch (error) {}
-  }
-
-  function updateQuotaUI(count) {
-    requestCount = Math.max(0, Math.floor(count));
-    $('#quota-count').text(requestCount + ' / ' + maxDailyRequests);
-    $('#quota-bar').css('width', Math.min(requestCount / maxDailyRequests * 100, 100) + '%');
+      const res = await window.authApi.getQuota(token);
+      if (sessionToken !== token) return;
+      if (res && res.ok) {
+        setQuotaFromServer(res.dailyUsed, res.dailyLimit);
+      } else {
+        setQuotaUnverified('Chưa tải được');
+      }
+    } catch (error) {
+      if (sessionToken === token) setQuotaUnverified('Chưa tải được');
+    }
   }
 
   function getByteSize(text) {
@@ -285,7 +296,6 @@ $(function () {
     }
     conversations.length = 0;
     activeId = null;
-    updateQuotaUI(readDailyQuota());
     updateStorageIndicator();
   }
 
@@ -340,12 +350,14 @@ $(function () {
     $('#login-view').addClass('is-hidden');
     $('#chat-view').removeClass('is-hidden');
     historyPrefix = 'chatbot.history.' + encodeURIComponent(user.username.trim().toLowerCase()) + '.';
-    dailyQuotaKey = 'chatbot.dailyQuota.' + encodeURIComponent(user.username.trim().toLowerCase());
-    if (Number(user.dailyLimit) > 0) {
-      maxDailyRequests = Math.floor(Number(user.dailyLimit));
+    clearLegacyLocalQuota();
+    if (Number.isFinite(Number(user.dailyUsed)) && Number(user.dailyLimit) > 0) {
+      setQuotaFromServer(user.dailyUsed, user.dailyLimit);
+    } else {
+      setQuotaUnverified('Đang tải…');
+      refreshQuotaFromServer();
     }
     historyWarningShown = false;
-    updateQuotaUI(readDailyQuota());
     updateSendButtonState();
     const stats = getStoredChatStats(historyPrefix);
     if (stats.bytes >= STORAGE_PROMPT_THRESHOLD_BYTES) {
@@ -410,11 +422,6 @@ $(function () {
       notify('Không đọc được lịch sử đã lưu trên trình duyệt.', 'info');
     }
     if (!activeConversation()) activeId = conversations.length ? conversations[0].id : null;
-    const todayMessages = conversations.reduce((total, chat) => total + chat.messages.filter(message =>
-      message.role === 'user' && message.createdAt && new Date(message.createdAt).toDateString() === new Date().toDateString()).length, 0);
-    const syncedCount = Math.max(readDailyQuota(), todayMessages);
-    writeDailyQuota(syncedCount);
-    updateQuotaUI(syncedCount);
     updateStorageIndicator();
     if (!conversations.length) newConversation();
     else { renderHistory(); renderMessages(); }
@@ -467,9 +474,8 @@ $(function () {
     refresh: openAdmin,
     signOut: function () { $('#logout').trigger('click'); },
     onDailyLimitChanged: function (newLimit) {
-      if (Number(newLimit) > 0) {
-        maxDailyRequests = Math.floor(Number(newLimit));
-        updateQuotaUI(readDailyQuota());
+      if (Number(newLimit) > 0 && quotaState.loaded) {
+        setQuotaFromServer(quotaState.used, Number(newLimit));
       }
     }
   });
@@ -617,10 +623,8 @@ $(function () {
       notify('Bot đang trả lời, vui lòng đợi phản hồi xong trước khi gửi tin mới.', 'info');
       return;
     }
-    const currentQuota = readDailyQuota();
-    if (currentQuota >= maxDailyRequests) {
-      updateQuotaUI(currentQuota);
-      notify('Bạn đã dùng hết ' + maxDailyRequests + ' lượt hỏi trong ngày hôm nay. Vui lòng quay lại vào ngày mai.', 'error');
+    if (quotaState.loaded && quotaState.used >= quotaState.limit) {
+      notify('Bạn đã dùng hết ' + quotaState.limit + ' lượt hỏi trong ngày hôm nay. Vui lòng quay lại vào ngày mai.', 'error');
       return;
     }
 
@@ -648,6 +652,7 @@ $(function () {
     const apiMessages = conversation.messages.slice(-20).map(function (m) {
       return { role: m.role, content: m.text };
     });
+    const clientRequestId = crypto.randomUUID();
 
     const assistantMessage = {
       id: crypto.randomUUID(),
@@ -666,9 +671,14 @@ $(function () {
     renderMessages();
 
     try {
-      const result = await window.authApi.aiChat(sessionToken, model.key, apiMessages);
+      const result = await window.authApi.aiChat(sessionToken, model.key, apiMessages, clientRequestId);
+      if (result && Number.isFinite(Number(result.dailyUsed)) && Number(result.dailyLimit) > 0) {
+        setQuotaFromServer(result.dailyUsed, result.dailyLimit);
+      }
       if (!result || !result.ok) {
-        throw new Error((result && result.message) || 'Không thể nhận phản hồi từ OpenRouter.');
+        const err = new Error((result && result.message) || 'Không thể nhận phản hồi từ OpenRouter.');
+        err.code = result && result.code;
+        throw err;
       }
 
       const finalReply = String(result.reply || '').trim() || '(Bot không trả về nội dung.)';
@@ -685,12 +695,6 @@ $(function () {
         return;
       }
 
-      if (Number(result.dailyLimit) > 0) {
-        maxDailyRequests = Math.floor(Number(result.dailyLimit));
-      }
-      const nextQuota = Math.max(readDailyQuota() + 1, Number(result.dailyUsed) || 0);
-      writeDailyQuota(nextQuota);
-      updateQuotaUI(nextQuota);
       renderHistory();
       renderMessages();
     } catch (error) {
@@ -778,7 +782,7 @@ $(function () {
     $('#history-sync-status').text('Lưu trên trình duyệt (tối đa 4 MB)');
     $('#storage-limit-badge').text('0 KB / 4 MB').removeClass('is-warning is-full');
     historyPrefix = null;
-    dailyQuotaKey = null;
+    clearLegacyLocalQuota();
     window.adminPanel.clear();
     $('#account-role').text('Standard');
     $('#admin-view, #open-admin').addClass('is-hidden');
@@ -794,11 +798,9 @@ $(function () {
     closeMobileNav();
     conversations.length = 0;
     activeId = null;
-    requestCount = 0;
     renderHistory();
     renderMessages();
-    $('#quota-count').text('0 / ' + maxDailyRequests);
-    $('#quota-bar').css('width', '0%');
+    setQuotaUnverified('— / —');
     $('#password').attr('type', 'password');
     $('#message-input').val('').css('height', '25px');
     $('#send-button').prop('disabled', true);

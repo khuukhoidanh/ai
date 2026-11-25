@@ -33,7 +33,10 @@
   }
 
   window.authApi = Object.freeze({
-    aiChat: function (token, modelKey, messages) { return request('aiChat', { token: token, modelKey: modelKey, messages: messages }, 60000); },
+    aiChat: function (token, modelKey, messages, clientRequestId) {
+      return request('aiChat', { token: token, modelKey: modelKey, messages: messages, clientRequestId: clientRequestId }, 60000);
+    },
+    getQuota: function (token) { return request('getQuota', { token: token }); },
     discordList: function (token) { return request('discordList', { token: token }); },
     discordSave: function (token, chat) { return request('discordSave', { token: token, chat: chat }); },
     discordLoad: function (token, chatId, before) { return request('discordLoad', { token: token, chatId: chatId, before: before }); },

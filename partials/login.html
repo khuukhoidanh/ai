@@ -1,0 +1,27 @@
+<section id="session-restore-view" class="session-restore-screen" aria-label="Khôi phục phiên đăng nhập">
+  <div class="session-restore-card">
+    <span class="session-restore-spinner" aria-hidden="true"></span>
+    <h1>Chatbot AI</h1>
+    <p id="session-restore-message" role="status" aria-live="polite">Đang khôi phục phiên đăng nhập…</p>
+    <div id="session-restore-actions" class="is-hidden">
+      <button id="session-retry" class="admin-button" type="button">Thử lại</button>
+      <button id="session-login" class="admin-button" type="button">Đăng nhập lại</button>
+    </div>
+  </div>
+</section>
+<main id="login-view" class="login-screen">
+  <section class="login-card" aria-labelledby="login-title">
+    <h1 id="login-title">LOGIN PAGE</h1>
+    <!-- <p class="login-demo-note">Đăng nhập bằng tài khoản được cấp quyền.</p> -->
+    <form id="login-form" novalidate>
+      <label class="sr-only" for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" maxlength="64" placeholder="Username" required>
+      <label class="sr-only" for="password">Password</label>
+      <div class="password-field">
+        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Password" required>
+        <button class="password-toggle" type="button" aria-label="Show password" aria-controls="password" aria-pressed="false">Show</button>
+      </div>
+      <button class="login-button" type="submit"><span class="login-spinner" aria-hidden="true"></span><span class="login-button-label">Đăng nhập</span></button>
+    </form>
+  </section>
+</main>

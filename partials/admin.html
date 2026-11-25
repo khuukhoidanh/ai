@@ -1,0 +1,76 @@
+<main id="admin-view" class="admin-screen is-hidden" aria-labelledby="admin-title">
+  <aside class="admin-sidebar" aria-label="Điều hướng quản trị">
+    <div class="admin-sidebar-brand"><span class="admin-logo"><i class="fa-solid fa-layer-group" aria-hidden="true"></i></span> Chatbot<span class="admin-logo-dot">.</span></div>
+    <div class="admin-workspace"><span class="admin-workspace-icon"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i></span><div><strong>Admin workspace</strong><small>Quản lý ứng dụng</small></div></div>
+    <p class="admin-nav-label">WORKSPACE</p>
+    <nav class="admin-nav">
+      <a class="active" href="#admin-overview" aria-current="location"><i class="fa-solid fa-chart-line" aria-hidden="true"></i> Tổng quan</a>
+      <a href="#admin-analytics"><i class="fa-solid fa-chart-pie" aria-hidden="true"></i> Sử dụng AI</a>
+      <a href="#admin-users-section"><i class="fa-solid fa-users" aria-hidden="true"></i> Quản lý tài khoản</a>
+      <a href="#admin-create-section"><i class="fa-solid fa-user-plus" aria-hidden="true"></i> Tạo tài khoản mới</a>
+      <a href="#admin-system-section"><i class="fa-solid fa-server" aria-hidden="true"></i> Hệ thống</a>
+      <a href="#admin-audit-section"><i class="fa-solid fa-clock-rotate-left" aria-hidden="true"></i> Nhật ký hoạt động</a>
+    </nav>
+    <div class="admin-sidebar-footer"><span class="admin-live-dot"></span> Không gian quản trị <span>v1.0</span></div>
+  </aside>
+  <header class="admin-header">
+    <div class="admin-breadcrumb">Workspace <span>/</span> <strong>Dashboard</strong></div>
+    <div class="admin-actions"><span class="admin-header-user"><span class="admin-profile-icon"><i class="fa-solid fa-user" aria-hidden="true"></i></span><strong id="admin-username">—</strong><span class="admin-badge">Admin</span></span><button id="admin-back" class="admin-button" type="button"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Về chat</button><button id="admin-logout" class="admin-button" type="button" aria-label="Đăng xuất"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i></button></div>
+  </header>
+  <div class="admin-content">
+    <div id="admin-overview" class="admin-intro"><div><p class="admin-eyebrow">DASHBOARD</p><h1 id="admin-title" tabindex="-1">Tổng quan ứng dụng</h1><p>Mọi hoạt động của Chatbot, trong một không gian.</p></div><button id="admin-refresh" class="admin-button admin-primary" type="button"><i class="fa-solid fa-rotate" aria-hidden="true"></i> Làm mới dữ liệu</button></div>
+    <div class="admin-summary-heading" data-admin-page="admin-overview"><span><i class="fa-solid fa-chart-simple" aria-hidden="true"></i> Thống kê sử dụng</span><span class="admin-period"><i class="fa-solid fa-calendar-days" aria-hidden="true"></i> Toàn bộ thời gian</span></div>
+    <section class="admin-stats" data-admin-page="admin-overview" aria-label="Tổng quan hệ thống">
+      <article class="admin-card"><span class="admin-card-icon"><i class="fa-solid fa-users" aria-hidden="true"></i></span><p>Tổng tài khoản</p><strong id="admin-user-count">—</strong><small id="admin-active-count">Chưa tải dữ liệu</small></article>
+      <article class="admin-card"><span class="admin-card-icon"><i class="fa-solid fa-coins" aria-hidden="true"></i></span><p>Token AI đã sử dụng</p><strong id="admin-token-count">—</strong><small id="admin-token-detail">Chưa có dữ liệu sử dụng AI</small></article>
+      <article class="admin-card"><span class="admin-card-icon mint"><i class="fa-solid fa-arrow-right-to-bracket" aria-hidden="true"></i></span><p>Token đầu vào</p><strong id="admin-input-count">—</strong><small>Nội dung gửi đến mô hình AI</small></article>
+      <article class="admin-card"><span class="admin-card-icon lavender"><i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i></span><p>Token đầu ra</p><strong id="admin-output-count">—</strong><small>Nội dung mô hình AI phản hồi</small></article>
+    </section>
+    <div id="admin-analytics" class="admin-chart-grid is-hidden" data-admin-page="admin-analytics">
+      <section class="admin-panel"><div class="admin-section-head"><div><h2>Phân bổ token AI</h2><p>8 tài khoản sử dụng nhiều nhất</p></div><span class="admin-badge">Toàn thời gian</span></div><div id="admin-token-chart" class="admin-token-chart"></div><div class="admin-chart-legend"><span><i class="legend-dot mint"></i> Đầu vào</span><span><i class="legend-dot lavender"></i> Đầu ra</span></div></section>
+      <section class="admin-panel"><div class="admin-section-head"><div><h2>Nhóm người dùng</h2><p>Phân bổ theo quyền tài khoản</p></div><i class="fa-solid fa-chart-pie admin-muted" aria-hidden="true"></i></div><div class="admin-donut-wrap"><div id="admin-role-chart" class="admin-donut" role="img" aria-label="Chưa có dữ liệu"><div><strong id="admin-role-total">—</strong><small>tài khoản</small></div></div></div><div id="admin-role-legend" class="admin-role-legend"></div></section>
+    </div>
+    <div id="admin-system-section" class="admin-panels is-hidden" data-admin-page="admin-system-section">
+      <section class="admin-panel" aria-labelledby="admin-system-title"><h2 id="admin-system-title">Trạng thái hệ thống</h2><dl class="admin-details"><div><dt>API đăng nhập</dt><dd id="admin-api-status" role="status">Chưa kiểm tra</dd></div><div><dt>Kiểm tra gần nhất</dt><dd id="admin-checked-at">—</dd></div><div><dt>Dịch vụ AI</dt><dd>OpenRouter (Apps Script)</dd></div><div><dt>Lưu trữ tài khoản</dt><dd>Google Sheets</dd></div></dl></section>
+      <section class="admin-panel"><h2>Phân quyền tài khoản &amp; Hạn mức</h2><p><strong>Standard</strong> — tài khoản thông thường.<br><strong>Vip</strong> — nhóm tài khoản nâng cao.<br><strong>Admin</strong> — quản lý người dùng và xem thống kê.</p><p id="admin-usage-note">Token chỉ được ghi nhận từ phản hồi thực tế của dịch vụ AI, không tính từ tin nhắn demo.</p><form id="admin-daily-limit-form" class="admin-filters" style="margin-top:12px;align-items:flex-end;"><label>Giới hạn lượt hỏi mỗi ngày (Daily requests)<input id="admin-daily-limit-input" type="number" min="1" max="10000" step="1" required></label><button id="admin-daily-limit-submit" class="admin-button admin-primary" type="submit">Lưu giới hạn</button></form></section>
+    </div>
+    <section id="admin-users-section" class="admin-panel admin-section is-hidden" data-admin-page="admin-users-section" aria-labelledby="admin-users-title">
+      <div class="admin-section-head"><h2 id="admin-users-title">Danh sách tài khoản</h2></div>
+      <div class="admin-filters"><label>Tìm tài khoản<input id="admin-search" type="search" placeholder="Tên đăng nhập"></label><label>Quyền<select id="admin-role-filter"><option value="">Tất cả</option><option value="standard">Standard</option><option value="vip">Vip</option><option value="admin">Admin</option></select></label></div>
+      <div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Tài khoản</th><th>Quyền</th><th>Trạng thái</th><th>Token vào / ra</th><th>Đăng nhập gần nhất</th><th>Thao tác</th></tr></thead><tbody id="admin-users-body"></tbody></table></div>
+    </section>
+    <section id="admin-create-section" class="admin-panel admin-section is-hidden" data-admin-page="admin-create-section" aria-labelledby="admin-create-title">
+      <h2 id="admin-create-title">Thông tin tài khoản mới</h2>
+      <p>Tạo tài khoản và chọn quyền truy cập cho người dùng.</p>
+      <form id="admin-create-form" novalidate>
+        <fieldset id="admin-create-fields">
+          <div class="admin-form-grid">
+            <label>Tên đăng nhập<input id="admin-create-username" maxlength="64" autocomplete="off" required></label>
+            <label>Quyền<select id="admin-create-role"><option value="standard">Standard</option><option value="vip">Vip</option><option value="admin">Admin</option></select></label>
+            <label>Mật khẩu<input id="admin-create-password" type="text" minlength="8" maxlength="256" placeholder="Ít nhất 8 ký tự" required></label>
+          </div>
+          <p>Tài khoản mới được kích hoạt ngay. Mật khẩu được mã hoá dạng băm và không thể xem lại.</p>
+          <div class="admin-actions"><button id="admin-create-submit" class="admin-button admin-primary" type="submit">Tạo tài khoản</button><button id="admin-create-cancel" class="admin-button" type="button">Về danh sách tài khoản</button></div>
+        </fieldset>
+      </form>
+    </section>
+    <section id="admin-editor" class="admin-panel admin-section is-hidden" aria-labelledby="admin-editor-title">
+      <h2 id="admin-editor-title" tabindex="-1">Chỉnh sửa tài khoản</h2>
+      <form id="admin-user-form" novalidate>
+        <fieldset id="admin-user-fields">
+          <div class="admin-form-grid">
+            <label>Tên đăng nhập<input id="admin-edit-username" maxlength="64" autocomplete="off" required></label>
+            <label>Thao tác<select id="admin-operation"><option value="update">Đổi quyền / trạng thái</option><option value="resetPassword">Đặt lại mật khẩu</option><option value="revokeSessions">Đăng xuất mọi phiên</option><option value="delete">Xoá tài khoản</option></select></label>
+            <label id="admin-role-field">Quyền<select id="admin-edit-role"><option value="standard">Standard</option><option value="vip">Vip</option><option value="admin">Admin</option></select></label>
+            <label id="admin-status-field">Trạng thái<select id="admin-edit-status"><option value="active">Hoạt động</option><option value="disabled">Đã khoá</option></select></label>
+            <label id="admin-password-field">Mật khẩu mới<input id="admin-edit-password" type="password" autocomplete="new-password" minlength="8" maxlength="256" placeholder="Ít nhất 8 ký tự"></label>
+            <label id="admin-delete-field" class="is-hidden">Nhập lại tên tài khoản để xác nhận xoá<input id="admin-delete-confirm" maxlength="64" autocomplete="off"><span class="admin-delete-note">Tài khoản sẽ bị xoá và không thể đăng nhập. Lịch sử token và nhật ký quản trị được giữ lại.</span></label>
+          </div>
+          <p>Đổi quyền, khoá tài khoản hoặc đặt lại mật khẩu sẽ thu hồi các phiên đăng nhập hiện có. Mật khẩu cũ không được hiển thị.</p>
+          <div class="admin-actions"><button id="admin-save-user" class="admin-button admin-primary" type="submit">Lưu thay đổi</button><button id="admin-cancel-edit" class="admin-button" type="button">Huỷ</button></div>
+        </fieldset>
+      </form>
+    </section>
+    <section id="admin-audit-section" class="admin-panel admin-section is-hidden" data-admin-page="admin-audit-section"><h2>Nhật ký quản trị</h2><p>50 thao tác gần nhất. Không lưu mật khẩu trong nhật ký.</p><div class="admin-table-wrap"><table class="admin-table"><thead><tr><th>Thời gian</th><th>Admin</th><th>Thao tác</th><th>Tài khoản</th></tr></thead><tbody id="admin-audit-body"></tbody></table></div></section>
+  </div>
+</main>
