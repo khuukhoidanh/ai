@@ -35,7 +35,7 @@
     }
   }
   const roles = { standard: 'Standard', vip: 'Vip', admin: 'Admin' };
-  const actions = { create: 'Tạo tài khoản', update: 'Đổi quyền / trạng thái', resetPassword: 'Đặt lại mật khẩu', revokeSessions: 'Thu hồi phiên', delete: 'Xoá tài khoản' };
+  const actions = { create: 'Tạo tài khoản', update: 'Đổi quyền / trạng thái', resetPassword: 'Đặt lại mật khẩu', revokeSessions: 'Thu hồi phiên', delete: 'Xoá tài khoản', setDailyLimit: 'Đổi giới hạn lượt/ngày' };
   const number = value => Number(value || 0).toLocaleString('vi-VN');
   const date = value => value && !isNaN(Date.parse(value)) ? new Date(value).toLocaleString('vi-VN') : '—';
   const notify = (message, type) => window.notifyUser({ message: message, type: type || 'error' });
@@ -157,6 +157,40 @@
       $('#admin-role-filter').on('change', renderUsers);
       $('#admin-create-cancel').on('click', function () { showPage('admin-users-section', true); });
       $('#admin-operation').on('change', fields);
+      $('#admin-daily-limit-form').on('submit', async function (event) {
+        event.preventDefault();
+        if (busy) return;
+        const token = options.getToken();
+        if (!token) return;
+        const limit = Number($('#admin-daily-limit-input').val());
+        if (!Number.isInteger(limit) || limit < 1 || limit > 10000) {
+          notify('Giới hạn phải là số nguyên từ 1 đến 10.000.');
+          $('#admin-daily-limit-input').trigger('focus');
+          return;
+        }
+        busy = true;
+        $('#admin-daily-limit-submit, #admin-daily-limit-input').prop('disabled', true);
+        $('#admin-daily-limit-submit').text('Đang lưu…');
+        try {
+          const result = await window.authApi.adminSetDailyLimit(token, limit);
+          if (options.getToken() !== token) return;
+          if (!result.ok) {
+            if (result.code === 'FORBIDDEN') options.signOut();
+            throw new Error(result.message || 'Không thể lưu giới hạn.');
+          }
+          if (typeof options.onDailyLimitChanged === 'function') {
+            options.onDailyLimitChanged(result.dailyLimit);
+          }
+          notify('Đã cập nhật giới hạn thành ' + result.dailyLimit + ' lượt/ngày.', 'success');
+          await options.refresh();
+        } catch (error) {
+          if (options.getToken() === token || !options.getToken()) notify(error.message);
+        } finally {
+          busy = false;
+          $('#admin-daily-limit-submit, #admin-daily-limit-input').prop('disabled', false);
+          $('#admin-daily-limit-submit').text('Lưu giới hạn');
+        }
+      });
       $('#admin-cancel-edit, #admin-back').on('click', function () { $('#admin-editor').addClass('is-hidden'); $('#admin-edit-password, #admin-create-password').val(''); });
       $('#admin-user-form, #admin-create-form').on('submit', async function (event) {
         event.preventDefault();
@@ -220,6 +254,9 @@
     render: function (result) {
       currentUsername = result.user.username;
       users = result.users;
+      if (Number(result.dailyLimit) > 0) {
+        $('#admin-daily-limit-input').val(result.dailyLimit);
+      }
       $('#admin-user-count').text(number(users.length));
       $('#admin-active-count').text(number(users.filter(user => user.status === 'active').length) + ' đang hoạt động');
       const usage = result.usage;

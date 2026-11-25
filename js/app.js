@@ -12,7 +12,9 @@ $(function () {
   const sessionStorageKey = 'chatbot.sessionToken';
   const MAX_CHAT_STORAGE_BYTES = 4 * 1024 * 1024;
   const STORAGE_PROMPT_THRESHOLD_BYTES = 3 * 1024 * 1024;
-  const MAX_DAILY_REQUESTS = 200;
+  let maxDailyRequests = (window.APP_CONFIG && Number(window.APP_CONFIG.dailyRequestLimit) > 0)
+    ? Math.floor(Number(window.APP_CONFIG.dailyRequestLimit))
+    : 200;
   let isBotResponding = false;
   let sessionModalMode = 'login-low-space';
   const OPENROUTER_MODELS = {
@@ -121,8 +123,8 @@ $(function () {
 
   function updateQuotaUI(count) {
     requestCount = Math.max(0, Math.floor(count));
-    $('#quota-count').text(requestCount + ' / ' + MAX_DAILY_REQUESTS);
-    $('#quota-bar').css('width', Math.min(requestCount / MAX_DAILY_REQUESTS * 100, 100) + '%');
+    $('#quota-count').text(requestCount + ' / ' + maxDailyRequests);
+    $('#quota-bar').css('width', Math.min(requestCount / maxDailyRequests * 100, 100) + '%');
   }
 
   function getByteSize(text) {
@@ -242,6 +244,9 @@ $(function () {
     $('#chat-view').removeClass('is-hidden');
     historyPrefix = 'chatbot.history.' + encodeURIComponent(user.username.trim().toLowerCase()) + '.';
     dailyQuotaKey = 'chatbot.dailyQuota.' + encodeURIComponent(user.username.trim().toLowerCase());
+    if (Number(user.dailyLimit) > 0) {
+      maxDailyRequests = Math.floor(Number(user.dailyLimit));
+    }
     historyWarningShown = false;
     updateQuotaUI(readDailyQuota());
     updateSendButtonState();
@@ -363,7 +368,13 @@ $(function () {
   window.adminPanel.init({
     getToken: function () { return sessionToken; },
     refresh: openAdmin,
-    signOut: function () { $('#logout').trigger('click'); }
+    signOut: function () { $('#logout').trigger('click'); },
+    onDailyLimitChanged: function (newLimit) {
+      if (Number(newLimit) > 0) {
+        maxDailyRequests = Math.floor(Number(newLimit));
+        updateQuotaUI(readDailyQuota());
+      }
+    }
   });
 
   function notify(message, type, developer) {
@@ -510,9 +521,9 @@ $(function () {
       return;
     }
     const currentQuota = readDailyQuota();
-    if (currentQuota >= MAX_DAILY_REQUESTS) {
+    if (currentQuota >= maxDailyRequests) {
       updateQuotaUI(currentQuota);
-      notify('Bạn đã dùng hết 200 lượt hỏi trong ngày hôm nay. Vui lòng quay lại vào ngày mai.', 'error');
+      notify('Bạn đã dùng hết ' + maxDailyRequests + ' lượt hỏi trong ngày hôm nay. Vui lòng quay lại vào ngày mai.', 'error');
       return;
     }
 
@@ -577,6 +588,9 @@ $(function () {
         return;
       }
 
+      if (Number(result.dailyLimit) > 0) {
+        maxDailyRequests = Math.floor(Number(result.dailyLimit));
+      }
       const nextQuota = Math.max(readDailyQuota() + 1, Number(result.dailyUsed) || 0);
       writeDailyQuota(nextQuota);
       updateQuotaUI(nextQuota);
@@ -686,7 +700,7 @@ $(function () {
     requestCount = 0;
     renderHistory();
     renderMessages();
-    $('#quota-count').text('0 / 200');
+    $('#quota-count').text('0 / ' + maxDailyRequests);
     $('#quota-bar').css('width', '0%');
     $('#password').attr('type', 'password');
     $('#message-input').val('').css('height', '25px');

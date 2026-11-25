@@ -39,6 +39,7 @@
     discordLoad: function (token, chatId, before) { return request('discordLoad', { token: token, chatId: chatId, before: before }); },
     adminDashboard: function (token) { return request('adminDashboard', { token: token }); },
     adminManageUser: function (token, data) { return request('adminManageUser', Object.assign({}, data, { token: token })); },
+    adminSetDailyLimit: function (token, dailyLimit) { return request('adminSetDailyLimit', { token: token, dailyLimit: dailyLimit }); },
     login: function (username, password) { return request('login', { username: username, password: password }); },
     getSession: function (token) { return request('getSession', { token: token }); },
     logout: function (token) { return request('logout', { token: token }); }
