@@ -186,17 +186,20 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 .message-content h1:first-child, .message-content h2:first-child, .message-content h3:first-child { margin-top: 2px; }
 .message-content h1 { font-size: 20px; letter-spacing: -.3px; }
-.message-content h2 { font-size: 17px; padding-bottom: 4px; border-bottom: 1px solid #ececf2; }
-.message-content h3 { font-size: 15px; }
+.message-content h2 { font-size: 17px; padding-bottom: 5px; border-bottom: 1px solid #e6e6ee; }
+.message-content h3 { font-size: 15px; color: #1d1d24; }
 .message-content h4 { font-size: 14px; color: #363640; }
-.message-content hr { margin: 12px 0; border: 0; border-top: 1px solid #e6e6ec; }
+.message-content strong { color: #111116; font-weight: 700; }
+.message-content em { color: #646470; }
+.message-content hr { margin: 14px 0; border: 0; border-top: 1px solid #e6e6ec; }
 .message-content blockquote {
-  margin: 10px 0;
-  padding: 6px 12px;
-  border-left: 3px solid #cfd0da;
-  border-radius: 0 6px 6px 0;
-  background: #f8f8fb;
-  color: #4a4a55;
+  margin: 12px 0;
+  padding: 10px 14px;
+  border: 1px solid #e3e5ef;
+  border-left: 4px solid #22222a;
+  border-radius: 0 8px 8px 0;
+  background: #f6f7fb;
+  color: #3a3a45;
 }
 .message-content a { color: #1668d8; text-decoration: underline; text-underline-offset: 2px; }
 .table-wrap {
