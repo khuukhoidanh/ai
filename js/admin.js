@@ -256,6 +256,9 @@
       users = result.users;
       if (Number(result.dailyLimit) > 0) {
         $('#admin-daily-limit-input').val(result.dailyLimit);
+        if (options && typeof options.onDailyLimitChanged === 'function') {
+          options.onDailyLimitChanged(result.dailyLimit);
+        }
       }
       $('#admin-user-count').text(number(users.length));
       $('#admin-active-count').text(number(users.filter(user => user.status === 'active').length) + ' đang hoạt động');
