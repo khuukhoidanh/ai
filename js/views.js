@@ -1,7 +1,15 @@
 (function () {
   'use strict';
 
-  const VERSION = '20261125-7';
+  const VERSION = '20261125-9';
+
+  if (window.location.href.endsWith('?')) {
+    window.history.replaceState(null, '', window.location.href.slice(0, -1));
+  }
+
+  document.addEventListener('submit', function (event) {
+    event.preventDefault();
+  });
 
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
