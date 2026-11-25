@@ -1,0 +1,13 @@
+# clasp project settings can contain a private script ID.
+.clasp.json
+
+# Local dependencies and environment files.
+node_modules/
+.env
+.env.*
+!.env.example
+
+# Local editor and OS files.
+.DS_Store
+Thumbs.db
+.vscode/
