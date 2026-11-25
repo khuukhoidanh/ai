@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '20261125-6';
+  const VERSION = '20261125-7';
 
   function loadScript(src) {
     return new Promise(function (resolve, reject) {
