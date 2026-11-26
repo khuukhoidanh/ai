@@ -128,87 +128,6 @@ test('deletion requires admin and exact confirmation, revokes access and preserv
   assert.equal(b.context.getSession(login.token).ok, false);
 });
 
-test('Discord history: private channels, ownership, idempotent saves and pagination', () => {
-  const b = backend();
-  const properties = new Map([['DISCORD_BRIDGE_URL', 'https://bridge.example.test'], ['DISCORD_BRIDGE_SECRET', 'test-secret']]);
-  b.context.PropertiesService = { getScriptProperties: () => ({ getProperty: key => properties.get(key), setProperty: (key, value) => properties.set(key, value) }) };
-  let sequence = 200000000000000000n;
-  const channels = [], messages = new Map();
-  let calls = 0, rateLimited = false;
-  b.context.UrlFetchApp = { fetch(url, options) {
-    calls++;
-    assert.equal(options.headers['X-Bridge-Secret'], 'test-secret');
-    assert.equal(url.startsWith('https://bridge.example.test/api/discord/'), true);
-    const route = new URL(url).pathname;
-    const body = options.payload ? JSON.parse(options.payload) : {};
-    if (rateLimited) return { getResponseCode: () => 429, getContentText: () => JSON.stringify({ ok: false, message: 'Discord đang giới hạn tốc độ.' }) };
-    if (route === '/api/discord/setup') {
-      return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ ok: true, botId: '100000000000000002', bot: 'bot', server: 'Test server' }) };
-    }
-    if (route === '/api/discord/channels/ensure') {
-      const marker = 'chatbot:' + body.ownerId + ':' + body.chatId;
-      let ch = channels.find(item => item.type === 0 && item.topic === marker);
-      if (!ch) {
-        const permissions = [{ id: '100000000000000001', type: 0, allow: '0', deny: '1024' }, { id: '100000000000000002', type: 1, allow: '85008', deny: '0' }];
-        const cat = { id: String(++sequence), type: 4, permission_overwrites: permissions };
-        ch = { id: String(++sequence), type: 0, parent_id: cat.id, topic: marker, permission_overwrites: permissions };
-        channels.push(cat, ch);
-      }
-      return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ ok: true, categoryId: ch.parent_id, channelId: ch.id }) };
-    }
-    if (route === '/api/discord/messages/save') {
-      const savedList = messages.get(body.channelId) || [];
-      const saved = body.messages.map(msg => {
-        const discordId = String(++sequence);
-        savedList.push({ id: discordId, messageId: msg.id, role: msg.role, text: msg.text, createdAt: msg.createdAt });
-        return { messageId: msg.id, discordId };
-      });
-      messages.set(body.channelId, savedList);
-      return { getResponseCode: () => 200, getContentText: () => JSON.stringify({ ok: true, saved }) };
-    }
-    if (route === '/api/discord/messages/load') {
-      const savedList = messages.get(body.channelId) || [];
-      const page = savedList.filter(m => !body.before || BigInt(m.id) < BigInt(body.before)).slice().reverse().slice(0, 100);
-      const before = page.length === 100 ? page[page.length - 1].id : null;
-      return { getResponseCode: () => 200, getContentText: () => JSON.stringify({
-        ok: true,
-        messages: page.slice().reverse().map(m => ({ id: m.messageId, role: m.role, text: m.text, createdAt: m.createdAt })),
-        before
-      }) };
-    }
-    return { getResponseCode: () => 404, getContentText: () => '{}' };
-  } };
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../apps-script/Discord.gs'), 'utf8'), b.context);
-  b.context.setupDiscordStorage();
-  const chat = { id: crypto.randomUUID(), title: 'Saved test', messages: [{ id: crypto.randomUUID(), role: 'user', text: '@everyone hello', createdAt: Date.now() }] };
-  const save = () => b.call({ action: 'discordSave', token: b.token, chat });
-  assert.equal(save().ok, true);
-  assert.equal(save().ok, true);
-  assert.equal(channels.length, 2);
-  assert.equal(channels[0].permission_overwrites[0].deny, '1024');
-  assert.equal(messages.get(channels[1].id).length, 1);
-  const loaded = b.call({ action: 'discordLoad', token: b.token, chatId: chat.id });
-  assert.equal(loaded.messages[0].text, '@everyone hello');
-  assert.equal(loaded.before, null);
-  b.manage({ operation: 'create', username: 'other', password: 'password-123', role: 'standard' });
-  const other = b.context.login('other', 'password-123');
-  assert.equal(b.call({ action: 'discordLoad', token: other.token, chatId: chat.id }).ok, false);
-  assert.equal(b.call({ action: 'discordList', token: other.token }).chats.length, 0);
-  const previousCalls = calls;
-  assert.equal(b.call({ action: 'discordSave', token: 'invalid', chat }).ok, false);
-  assert.equal(calls, previousCalls);
-  for (let i = 1; i < 105; i++) chat.messages.push({ id: crypto.randomUUID(), role: 'user', text: 'message ' + i, createdAt: Date.now() + i });
-  while (save().remaining > 0) {}
-  const first = b.call({ action: 'discordLoad', token: b.token, chatId: chat.id });
-  assert.equal(first.messages.length, 100);
-  const second = b.call({ action: 'discordLoad', token: b.token, chatId: chat.id, before: first.before });
-  assert.equal(second.messages.length, 5);
-  rateLimited = true;
-  const failure = b.call({ action: 'discordLoad', token: b.token, chatId: chat.id });
-  assert.equal(failure.ok, false);
-  assert.equal(JSON.stringify(failure).includes('test-secret'), false);
-});
-
 test('token aggregation is exact, deduplicated and audit excludes credentials', () => {
   const b = backend();
   b.context.recordAiUsage_('owner', 'demo-model', 120, 35, 'req-1');
@@ -432,4 +351,150 @@ test('login rate limiting blocks brute force after 5 failed attempts and resets 
 
   // Bob is unaffected by alice's lockout.
   assert.equal(b.context.login('bob', 'bob-password').ok, true);
+});
+
+test('login avoids locks, full sheet scans and sync writes while preserving lastLogin and self-healing row index', () => {
+  const stats = { locks: 0, dataRangeReads: new Map(), rangeReads: new Map(), writes: new Map() };
+  class InstrumentedSheet {
+    constructor(name) { this.name = name; this.rows = []; }
+    getLastRow() { return this.rows.length; }
+    appendRow(row) { this.rows.push([...row]); }
+    deleteRow(row) { this.rows.splice(row - 1, 1); }
+    setFrozenRows() {}
+    getDataRange() {
+      stats.dataRangeReads.set(this.name, (stats.dataRangeReads.get(this.name) || 0) + 1);
+      const width = Math.max(1, ...this.rows.map(row => row.length));
+      return this.getRange(1, 1, Math.max(1, this.rows.length), width, true);
+    }
+    getRange(row, col, height = 1, width = 1, fromDataRange = false) {
+      return {
+        getValues: () => {
+          if (!fromDataRange) stats.rangeReads.set(this.name, (stats.rangeReads.get(this.name) || 0) + 1);
+          return Array.from({ length: height }, (_, i) => Array.from({ length: width }, (_, j) => this.rows[row - 1 + i]?.[col - 1 + j] ?? ''));
+        },
+        setValue: value => {
+          stats.writes.set(this.name, (stats.writes.get(this.name) || 0) + 1);
+          this.rows[row - 1] ||= [];
+          this.rows[row - 1][col - 1] = value;
+        },
+        setValues: values => {
+          stats.writes.set(this.name, (stats.writes.get(this.name) || 0) + 1);
+          values.forEach((line, i) => line.forEach((value, j) => { this.rows[row - 1 + i] ||= []; this.rows[row - 1 + i][col - 1 + j] = value; }));
+        }
+      };
+    }
+  }
+
+  const sheets = new Map();
+  const spreadsheet = {
+    getSheetByName: name => sheets.get(name),
+    insertSheet: name => { const sheet = new InstrumentedSheet(name); sheets.set(name, sheet); return sheet; }
+  };
+  const cache = new Map();
+  let locked = false;
+  const context = vm.createContext({
+    console: { error() {} },
+    SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet },
+    LockService: { getScriptLock: () => ({ waitLock() { assert.equal(locked, false); locked = true; stats.locks += 1; }, releaseLock() { locked = false; } }) },
+    CacheService: {
+      getScriptCache: () => ({
+        put: (key, value) => cache.set(key, value),
+        putAll: entries => Object.entries(entries).forEach(([k, v]) => cache.set(k, v)),
+        get: key => cache.get(key),
+        getAll: keys => Object.fromEntries(keys.filter(k => cache.has(k)).map(k => [k, cache.get(k)])),
+        remove: key => cache.delete(key)
+      })
+    },
+    ContentService: { MimeType: { JSON: 'application/json' }, createTextOutput: text => ({ text, setMimeType() { return this; } }) },
+    Utilities: {
+      getUuid: () => crypto.randomUUID(),
+      newBlob: text => ({ getBytes: () => [...Buffer.from(text)] }),
+      computeHmacSha256Signature: (data, key) => [...crypto.createHmac('sha256', Buffer.from(key)).update(Buffer.from(data)).digest()],
+      computeDigest: (_, text) => [...crypto.createHash('sha256').update(text).digest()],
+      DigestAlgorithm: { SHA_256: 'sha256' }
+    }
+  });
+  for (const name of ['Code.gs', 'Admin.gs']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../apps-script', name), 'utf8'), context);
+  context.setupAdminSheets();
+  context.createUser('owner', 'owner-password', 'Admin');
+  context.createUser('alice', 'alice-password', 'standard');
+  context.createUser('bob', 'bob-password', 'vip');
+  const ownerToken = context.login('owner', 'owner-password').token;
+
+  const resetStats = () => {
+    stats.locks = 0;
+    stats.dataRangeReads.clear();
+    stats.rangeReads.clear();
+    stats.writes.clear();
+  };
+
+  // Cold login warms the Users row index and quota cache for all users.
+  resetStats();
+  const aliceCold = context.login('alice', 'alice-password');
+  assert.equal(aliceCold.ok, true);
+  assert.equal(stats.locks, 0);
+  assert.equal(stats.writes.get('Users') || 0, 0);
+  assert.equal(stats.dataRangeReads.get('Usage') || 0, 0);
+
+  // Warm login for another user (bob) uses cached Users index (1-row read) and skips DailyQuota/Usage scans after first warm.
+  const bobWarm1 = context.login('bob', 'bob-password');
+  assert.equal(bobWarm1.ok, true);
+  resetStats();
+  const bobWarm2 = context.login('bob', 'bob-password');
+  assert.equal(bobWarm2.ok, true);
+  assert.equal(stats.locks, 0);
+  assert.equal(stats.writes.get('Users') || 0, 0);
+  assert.equal(stats.dataRangeReads.get('Users') || 0, 0);
+  assert.equal(stats.rangeReads.get('Users'), 1);
+  assert.equal(stats.dataRangeReads.get('DailyQuota') || 0, 0);
+  assert.equal(stats.rangeReads.get('DailyQuota') || 0, 0);
+  assert.equal(stats.dataRangeReads.get('Usage') || 0, 0);
+  assert.equal(stats.rangeReads.get('Usage') || 0, 0);
+
+  // Warm getSession also reads only 1 row from Users and 0 from DailyQuota/Usage.
+  resetStats();
+  const bobSession = context.getSession(bobWarm2.token);
+  assert.equal(bobSession.ok, true);
+  assert.equal(bobSession.user.role, 'vip');
+  assert.equal(stats.dataRangeReads.get('Users') || 0, 0);
+  assert.equal(stats.rangeReads.get('Users'), 1);
+  assert.equal(stats.rangeReads.get('DailyQuota') || 0, 0);
+  assert.equal(stats.rangeReads.get('Usage') || 0, 0);
+
+  // adminDashboard returns cached lastLogin immediately and persists it once to Users.
+  const dash1 = JSON.parse(context.doPost({ postData: { contents: JSON.stringify({ action: 'adminDashboard', token: ownerToken }) } }).text);
+  assert.equal(dash1.ok, true);
+  const bobRowInfo = dash1.users.find(u => u.username === 'bob');
+  assert.ok(bobRowInfo.lastLogin);
+  assert.equal(sheets.get('Users').rows[3][6], bobRowInfo.lastLogin);
+
+  resetStats();
+  const dash2 = JSON.parse(context.doPost({ postData: { contents: JSON.stringify({ action: 'adminDashboard', token: ownerToken }) } }).text);
+  assert.equal(dash2.ok, true);
+  assert.equal(stats.locks, 0);
+  assert.equal(stats.writes.get('Users') || 0, 0);
+
+  // Manual row deletion directly on Users shifts bob from row 4 to row 3; cached row hint self-heals on mismatch.
+  sheets.get('Users').deleteRow(3); // Delete alice directly without adminManageUser_
+  assert.equal(context.login('alice', 'alice-password').ok, false);
+  const bobAfterShift = context.login('bob', 'bob-password');
+  assert.equal(bobAfterShift.ok, true);
+  assert.equal(bobAfterShift.role, 'vip');
+  assert.equal(typeof bobAfterShift.timing.totalMs, 'number');
+  assert.equal(bobAfterShift.timing.totalMs >= 0, true);
+});
+
+test('pure-JS PBKDF2-HMAC-SHA-256 matches Node crypto.pbkdf2Sync across ASCII, long and UTF-8 passwords', () => {
+  const b = backend();
+  const saltHex = '0123456789abcdef0123456789abcdef';
+  const samples = [
+    'test-password',
+    'Mật khẩu tiếng Việt có dấu 🔐🚀 và ký tự đặc biệt !@#$%',
+    'a-very-long-password-exceeding-the-64-byte-hmac-sha256-block-size-to-force-key-hashing-1234567890'
+  ];
+  for (const pwd of samples) {
+    const expected = crypto.pbkdf2Sync(pwd, Buffer.from(saltHex, 'hex'), 12000, 32, 'sha256').toString('hex');
+    const actual = b.context.hashPassword_(pwd, saltHex);
+    assert.equal(actual, expected);
+  }
 });

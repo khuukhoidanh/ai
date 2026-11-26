@@ -11,7 +11,6 @@ Cập nhật lần cuối: **26/11/2026** — Phiên bản hiện tại trên nh
 - **Các nhánh Git**:
   - `main`: Phiên bản chính đang chạy trên GitHub Pages (lưu lịch sử chat cục bộ `localStorage` tối đa 4 MB + quota phía server + OpenRouter `Auto (Free)`).
   - `feature/api_bot`: Nhánh phát triển tích hợp OpenRouter API.
-  - `feature/databases`: Nhánh lưu trữ lịch sử chat qua Discord REST API + Node.js Bridge (`server/`), tạm tách riêng để dùng khi triển khai server/VPS.
 
 ---
 
@@ -60,4 +59,3 @@ Cập nhật lần cuối: **26/11/2026** — Phiên bản hiện tại trên nh
 - [ ] Thêm hệ thống **Skill (chế độ chuyên biệt)**: Code & Debug, Tóm tắt nhanh, Dịch thuật, Viết Email/Bài đăng.
 - [ ] Tích hợp tìm tin mới miễn phí (bật/tắt qua Google News RSS trên Apps Script) hoặc đọc file text/code ở nút `+`.
 - [ ] Cho phép người dùng tự đổi mật khẩu cá nhân.
-- [ ] Khi có VPS/Cloudflare Workers, hợp nhất nhánh `feature/databases` để lưu nhiều cuộc trò chuyện lên cloud.

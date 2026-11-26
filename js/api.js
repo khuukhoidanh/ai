@@ -37,13 +37,13 @@
       return request('aiChat', { token: token, modelKey: modelKey, messages: messages, clientRequestId: clientRequestId }, 60000);
     },
     getQuota: function (token) { return request('getQuota', { token: token }); },
-    discordList: function (token) { return request('discordList', { token: token }); },
-    discordSave: function (token, chat) { return request('discordSave', { token: token, chat: chat }); },
-    discordLoad: function (token, chatId, before) { return request('discordLoad', { token: token, chatId: chatId, before: before }); },
     adminDashboard: function (token) { return request('adminDashboard', { token: token }); },
     adminManageUser: function (token, data) { return request('adminManageUser', Object.assign({}, data, { token: token })); },
     adminSetDailyLimit: function (token, dailyLimit) { return request('adminSetDailyLimit', { token: token, dailyLimit: dailyLimit }); },
     login: function (username, password) { return request('login', { username: username, password: password }); },
+    register: function (discordId, username, password, confirmPassword) {
+      return request('register', { discordId: discordId, username: username, password: password, confirmPassword: confirmPassword });
+    },
     getSession: function (token) { return request('getSession', { token: token }); },
     logout: function (token) { return request('logout', { token: token }); }
   });

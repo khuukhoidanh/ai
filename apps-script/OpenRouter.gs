@@ -19,11 +19,7 @@ function quotaIdempotencyKey_(username, clientRequestId) {
   if (typeof clientRequestId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/.test(clientRequestId)) {
     return '';
   }
-  const digest = Utilities.computeDigest(
-    Utilities.DigestAlgorithm.SHA_256,
-    String(username || '').toLowerCase() + ':' + clientRequestId
-  );
-  return 'ai:idemp:' + bytesToHex_(digest);
+  return 'ai:idemp:' + sha256Hex_(String(username || '').toLowerCase() + ':' + clientRequestId);
 }
 
 function quotaInFlightKey_(username, dateKey) {
@@ -53,7 +49,8 @@ function aiChat_(request) {
       else cache.remove(inFlightKey);
       if (idempKey) cache.remove(idempKey);
 
-      const rowInfo = getOrInitDailyQuotaRow_(reservedUsername, reservedDateKey);
+      const rowInfo = getOrInitDailyQuotaRow_(reservedUsername, reservedDateKey, cache);
+      setQuotaCache_(reservedUsername, reservedDateKey, rowInfo.usedCount, rowInfo.row, cache);
       const limit = getDailyRequestLimit_();
       return {
         dailyUsed: rowInfo.usedCount,
@@ -64,7 +61,7 @@ function aiChat_(request) {
   }
 
   try {
-    const session = getSession(request && request.token);
+    const session = getSession_(request && request.token, false);
     if (!session.ok || !session.user) {
       return { ok: false, code: 'UNAUTHORIZED', message: 'Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.' };
     }
@@ -117,7 +114,7 @@ function aiChat_(request) {
 
       reservedDateKey = getQuotaDateKey_();
       const dailyLimit = getDailyRequestLimit_();
-      const rowInfo = getOrInitDailyQuotaRow_(reservedUsername, reservedDateKey);
+      const rowInfo = getOrInitDailyQuotaRow_(reservedUsername, reservedDateKey, cache);
       const inFlightKey = quotaInFlightKey_(reservedUsername, reservedDateKey);
       const inFlight = readInFlightCount_(cache, inFlightKey);
 
@@ -259,11 +256,12 @@ function aiChat_(request) {
       if (nextInFlight > 0) cache.put(inFlightKey, String(nextInFlight), 75);
       else cache.remove(inFlightKey);
 
-      const rowInfo = getOrInitDailyQuotaRow_(reservedUsername, reservedDateKey);
+      const rowInfo = getOrInitDailyQuotaRow_(reservedUsername, reservedDateKey, cache);
       const newUsed = rowInfo.usedCount + 1;
       const limit = getDailyRequestLimit_();
       rowInfo.sheet.getRange(rowInfo.row, 3, 1, 2).setValues([[newUsed, new Date().toISOString()]]);
       recordAiUsageUnlocked_(reservedUsername, actualModelId, inputTokens, outputTokens, rawId);
+      setQuotaCache_(reservedUsername, reservedDateKey, newUsed, rowInfo.row, cache);
       const res = {
         ok: true,
         reply: reply,

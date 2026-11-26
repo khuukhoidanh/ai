@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '20261125-9';
+  const VERSION = '20261126-1';
 
   if (window.location.href.endsWith('?')) {
     window.history.replaceState(null, '', window.location.href.slice(0, -1));

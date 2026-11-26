@@ -3,6 +3,7 @@ $(function () {
   let activeId = null;
   let sessionToken = null;
   let loginPending = false;
+  let registerPending = false;
   let sessionRole = null;
   let historyPrefix = null;
   let historyWarningShown = false;
@@ -707,9 +708,32 @@ $(function () {
     }
   }
 
+  function setAuthMode(mode) {
+    const isRegister = mode === 'register';
+    $('#auth-tab-login')
+      .toggleClass('is-active', !isRegister)
+      .attr('aria-selected', String(!isRegister));
+    $('#auth-tab-register')
+      .toggleClass('is-active', isRegister)
+      .attr('aria-selected', String(isRegister));
+    $('#login-form').toggleClass('is-hidden', isRegister);
+    $('#register-form').toggleClass('is-hidden', !isRegister);
+    $('#login-title').text(isRegister ? 'REGISTER' : 'LOGIN PAGE');
+    $('#username, #password, #reg-discord-id, #reg-username, #reg-password, #reg-confirm-password').removeAttr('aria-invalid');
+    $(isRegister ? '#reg-discord-id' : '#username').trigger('focus');
+  }
+
+  $('#auth-tab-login').on('click', function () {
+    if (!loginPending && !registerPending) setAuthMode('login');
+  });
+
+  $('#auth-tab-register').on('click', function () {
+    if (!loginPending && !registerPending) setAuthMode('register');
+  });
+
   $('#login-form').on('submit', function (event) {
     event.preventDefault();
-    if (loginPending) return;
+    if (loginPending || registerPending) return;
     const username = $('#username').val().trim();
     const password = $('#password').val();
     const $button = $('#login-form button[type="submit"]');
@@ -759,13 +783,79 @@ $(function () {
       });
   });
 
-  $('#username, #password').on('input', function () {
+  $('#register-form').on('submit', function (event) {
+    event.preventDefault();
+    if (loginPending || registerPending) return;
+
+    const discordId = ($('#reg-discord-id').val() || '').trim();
+    const username = ($('#reg-username').val() || '').trim();
+    const password = $('#reg-password').val() || '';
+    const confirmPassword = $('#reg-confirm-password').val() || '';
+    const $button = $('#register-form button[type="submit"]');
+
+    $('#reg-discord-id, #reg-username, #reg-password, #reg-confirm-password').removeAttr('aria-invalid');
+
+    if (!/^\d{17,20}$/.test(discordId)) {
+      $('#reg-discord-id').attr('aria-invalid', 'true').trigger('focus');
+      notify('Discord ID phải gồm 17 đến 20 chữ số.', 'error');
+      return;
+    }
+    if (!username || username.length > 64 || /[\u0000-\u001f\u007f]/.test(username) || /^[=+@-]/.test(username)) {
+      $('#reg-username').attr('aria-invalid', 'true').trigger('focus');
+      notify('Tên đăng nhập không hợp lệ (không bắt đầu bằng =, +, @, -).', 'error');
+      return;
+    }
+    if (!password || password.length < 8 || password.length > 256) {
+      $('#reg-password').attr('aria-invalid', 'true').trigger('focus');
+      notify('Mật khẩu cần từ 8 đến 256 ký tự.', 'error');
+      return;
+    }
+    if (password !== confirmPassword) {
+      $('#reg-confirm-password').attr('aria-invalid', 'true').trigger('focus');
+      notify('Mật khẩu xác nhận không khớp.', 'error');
+      return;
+    }
+
+    registerPending = true;
+    $('#register-form').attr('aria-busy', 'true');
+    $('#reg-discord-id, #reg-username, #reg-password, #reg-confirm-password').prop('readOnly', true);
+    $button.prop('disabled', true).addClass('is-loading');
+    $button.find('.login-button-label').text('Đang xác minh…');
+
+    window.authApi.register(discordId, username, password, confirmPassword)
+      .then(function (result) {
+        $('#reg-password, #reg-confirm-password').val('');
+        if (!result || !result.ok) {
+          notify((result && result.message) || 'Không thể đăng ký tài khoản. Vui lòng thử lại.', 'error');
+          return;
+        }
+        $('#reg-discord-id, #reg-username').val('');
+        setAuthMode('login');
+        $('#username').val(result.username || username);
+        $('#password').val('').trigger('focus');
+        notify(result.message || 'Đăng ký thành công. Bạn có thể đăng nhập ngay.', 'success');
+      })
+      .catch(function (error) {
+        $('#reg-password, #reg-confirm-password').val('');
+        notify((error && error.message) || 'Hệ thống xác minh đăng ký tạm thời không khả dụng. Vui lòng thử lại sau.', 'error');
+      })
+      .finally(function () {
+        registerPending = false;
+        $('#register-form').attr('aria-busy', 'false');
+        $('#reg-discord-id, #reg-username, #reg-password, #reg-confirm-password').prop('readOnly', false);
+        $button.prop('disabled', false).removeClass('is-loading');
+        $button.find('.login-button-label').text('Đăng ký');
+      });
+  });
+
+  $('#username, #password, #reg-discord-id, #reg-username, #reg-password, #reg-confirm-password').on('input', function () {
     $(this).removeAttr('aria-invalid');
   });
 
   $('.password-toggle').on('click', function () {
-    const showPassword = $('#password').attr('type') === 'password';
-    $('#password').attr('type', showPassword ? 'text' : 'password');
+    const $input = $(this).closest('.password-field').find('input');
+    const showPassword = $input.attr('type') === 'password';
+    $input.attr('type', showPassword ? 'text' : 'password');
     $(this)
       .attr('aria-pressed', String(showPassword))
       .attr('aria-label', showPassword ? 'Hide password' : 'Show password')
@@ -790,10 +880,12 @@ $(function () {
     $('#admin-api-status').text('Chưa kiểm tra');
     $('#chat-view').addClass('is-hidden');
     $('#login-view').removeClass('is-hidden');
-    $('#username, #password').val('');
+    setAuthMode('login');
+    $('#username, #password, #reg-discord-id, #reg-username, #reg-password, #reg-confirm-password').val('');
     $('#account-name').text('Guest');
     $('.avatar').text('G');
     $('.password-toggle').attr({ 'aria-pressed': 'false', 'aria-label': 'Show password' }).text('Show');
+    $('#reg-password, #reg-confirm-password').attr('type', 'password');
     $('#username, #password').removeAttr('aria-invalid');
     closeMobileNav();
     conversations.length = 0;

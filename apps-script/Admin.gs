@@ -8,6 +8,7 @@ function setupAdminSheets() {
     userRecords_().forEach(function (user) {
       sheet.getRange(user.row, headers.indexOf('role') + 1).setValue(normalizeRole_(user.role || 'standard'));
     });
+    invalidateUsersIndexCache_();
     return { ok: true };
   });
 }
@@ -22,16 +23,20 @@ function ensureAdminSchema_() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = getUsersSheet_();
   const headers = sheet.getDataRange().getValues()[0];
+  let schemaUpdated = false;
   ['status', 'sessionVersion', 'createdAt', 'lastLogin'].forEach(function (header) {
     if (!headers.includes(header)) {
       headers.push(header);
       sheet.getRange(1, headers.length).setValue(header);
+      schemaUpdated = true;
     }
   });
+  if (schemaUpdated) invalidateUsersIndexCache_();
   [
     ['Usage', ['requestId', 'timestamp', 'username', 'model', 'inputTokens', 'outputTokens']],
     ['Audit', ['timestamp', 'actor', 'action', 'target']],
-    ['DailyQuota', ['username', 'dateKey', 'usedCount', 'updatedAt']]
+    ['DailyQuota', ['username', 'dateKey', 'usedCount', 'updatedAt']],
+    ['DiscordAccounts', ['discordId', 'username', 'createdAt']]
   ].forEach(function (definition) {
     let target = spreadsheet.getSheetByName(definition[0]);
     if (!target) target = spreadsheet.insertSheet(definition[0]);
@@ -51,7 +56,7 @@ function userRecords_() {
 }
 
 function requireAdmin_(token) {
-  const session = getSession(token);
+  const session = getSession_(token, false);
   if (!session.ok || session.user.role !== 'admin') throw new Error('FORBIDDEN');
   return session.user;
 }
@@ -60,6 +65,74 @@ function adminFailure_(error) {
   if (error.message === 'FORBIDDEN') return { ok: false, code: 'FORBIDDEN', message: 'Phiên hết hạn hoặc bạn không có quyền Admin.' };
   console.error('Admin operation failed:', error.message);
   return { ok: false, message: 'Không thể xử lý yêu cầu. Kiểm tra dữ liệu hoặc thử lại.' };
+}
+
+function isNewerTimestamp_(candidate, current) {
+  if (!candidate) return false;
+  const candidateMs = Date.parse(String(candidate));
+  if (Number.isNaN(candidateMs)) return false;
+  if (!current) return true;
+  const currentMs = Date.parse(String(current));
+  return Number.isNaN(currentMs) || candidateMs > currentMs;
+}
+
+function flushLastLogins_(entries) {
+  if (!entries || entries.length === 0) return 0;
+  return withAdminLock_(function () {
+    const sheet = getUsersSheet_();
+    const values = sheet.getDataRange().getValues();
+    if (values.length < 2) return 0;
+    const headers = values[0].map(String);
+    const userCol = headers.indexOf('username');
+    const loginCol = headers.indexOf('lastLogin');
+    if (userCol < 0 || loginCol < 0) return 0;
+
+    const rowByUser = Object.create(null);
+    for (let i = 1; i < values.length; i += 1) {
+      const key = String(values[i][userCol] || '').toLowerCase();
+      if (key && rowByUser[key] === undefined) rowByUser[key] = i + 1;
+    }
+
+    let updated = 0;
+    entries.forEach(function (entry) {
+      const rowNumber = rowByUser[String(entry.username || '').toLowerCase()];
+      if (!rowNumber) return;
+      const existing = values[rowNumber - 1][loginCol];
+      if (isNewerTimestamp_(entry.lastLogin, existing)) {
+        sheet.getRange(rowNumber, loginCol + 1).setValue(entry.lastLogin);
+        updated += 1;
+      }
+    });
+    return updated;
+  });
+}
+
+function collectPendingLastLogins_(rawUsers, cache) {
+  const activeCache = cache || CacheService.getScriptCache();
+  const keys = rawUsers.map(user => lastLoginCacheKey_(user.username));
+  const cachedMap = cacheGetMany_(activeCache, keys);
+  const dirty = [];
+  const effectiveByUser = Object.create(null);
+
+  rawUsers.forEach(function (user, idx) {
+    const sheetLastLogin = String(user.lastLogin || '');
+    const cachedLastLogin = cachedMap[keys[idx]];
+    if (cachedLastLogin && isNewerTimestamp_(cachedLastLogin, sheetLastLogin)) {
+      effectiveByUser[user.username.toLowerCase()] = String(cachedLastLogin);
+      dirty.push({ username: user.username, lastLogin: String(cachedLastLogin) });
+    } else {
+      effectiveByUser[user.username.toLowerCase()] = sheetLastLogin;
+    }
+  });
+
+  return { effectiveByUser: effectiveByUser, dirty: dirty };
+}
+
+/** Optional periodic trigger target to persist cached lastLogin timestamps to Users. */
+function syncLastLogins() {
+  const rawUsers = userRecords_();
+  const collected = collectPendingLastLogins_(rawUsers);
+  return { ok: true, updated: flushLastLogins_(collected.dirty) };
 }
 
 function adminDashboard_(token) {
@@ -79,12 +152,18 @@ function adminDashboard_(token) {
       if (!byUser[key]) byUser[key] = { inputTokens: 0, outputTokens: 0, requests: 0 };
       [totals, byUser[key]].forEach(function (entry) { entry.inputTokens += input; entry.outputTokens += output; entry.requests++; });
     });
-    const users = userRecords_().map(function (user) {
+    const rawUsers = userRecords_();
+    const pendingLogins = collectPendingLastLogins_(rawUsers);
+    const users = rawUsers.map(function (user) {
+      const lower = user.username.toLowerCase();
       return { username: user.username, role: normalizeRole_(user.role || 'standard'),
         status: user.status === 'disabled' ? 'disabled' : 'active',
-        createdAt: String(user.createdAt || ''), lastLogin: String(user.lastLogin || ''),
-        usage: byUser[user.username.toLowerCase()] || { inputTokens: 0, outputTokens: 0, requests: 0 } };
+        createdAt: String(user.createdAt || ''), lastLogin: pendingLogins.effectiveByUser[lower] || '',
+        usage: byUser[lower] || { inputTokens: 0, outputTokens: 0, requests: 0 } };
     });
+    if (pendingLogins.dirty.length > 0) {
+      flushLastLogins_(pendingLogins.dirty);
+    }
     const audit = spreadsheet.getSheetByName('Audit').getDataRange().getValues().slice(1).slice(-50).reverse()
       .map(row => ({ timestamp: String(row[0]), actor: String(row[1]), action: String(row[2]), target: String(row[3]) }));
     return { ok: true, user: actor, users: users, usage: totals, audit: audit, dailyLimit: getDailyRequestLimit_() };
@@ -126,16 +205,43 @@ function getQuotaDateKey_(dateObj) {
   }).format(target);
 }
 
+function quotaStatusCacheKey_(username, dateKey) {
+  return 'quota:status:' + dateKey + ':' + sha256Hex_(String(username || '').toLowerCase());
+}
+
+function quotaRowCacheKey_(username, dateKey) {
+  return 'quota:row:' + dateKey + ':' + sha256Hex_(String(username || '').toLowerCase());
+}
+
+function setQuotaCache_(username, dateKey, usedCount, rowNumber, cache) {
+  try {
+    const activeCache = cache || CacheService.getScriptCache();
+    activeCache.put(quotaStatusCacheKey_(username, dateKey), String(Math.max(0, Math.floor(Number(usedCount) || 0))), AUTH_CONFIG.quotaCacheTtlSeconds);
+    if (Number.isInteger(rowNumber) && rowNumber >= 2) {
+      activeCache.put(quotaRowCacheKey_(username, dateKey), String(rowNumber), AUTH_CONFIG.quotaRowCacheTtlSeconds);
+    }
+  } catch (error) {}
+}
+
+function invalidateQuotaStatusCache_(username, dateKey, cache) {
+  try {
+    (cache || CacheService.getScriptCache()).remove(quotaStatusCacheKey_(username, dateKey));
+  } catch (error) {}
+}
+
 function countTodayUsageInSheet_(username, dateKey) {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = spreadsheet && spreadsheet.getSheetByName('Usage');
-  if (!sheet || sheet.getLastRow() < 2) return 0;
-  const rows = sheet.getDataRange().getValues().slice(1);
+  if (!sheet) return 0;
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+  // Read only timestamp (col 2) and username (col 3) instead of the full Usage sheet.
+  const rows = sheet.getRange(2, 2, lastRow - 1, 2).getValues();
   const target = String(username || '').toLowerCase();
   let count = 0;
   rows.forEach(function (row) {
-    if (String(row[2] || '').toLowerCase() !== target) return;
-    const ts = new Date(row[1]);
+    if (String(row[1] || '').toLowerCase() !== target) return;
+    const ts = new Date(row[0]);
     if (!Number.isNaN(ts.getTime()) && getQuotaDateKey_(ts) === dateKey) count += 1;
   });
   return count;
@@ -148,47 +254,107 @@ function normalizeSheetDateKey_(cellValue) {
   return String(cellValue || '').replace(/^'/, '').trim();
 }
 
-function getOrInitDailyQuotaRow_(username, dateKey) {
+function findDailyQuotaRowByHint_(sheet, lastRow, targetLower, dateKey, cachedRowValue) {
+  const cachedRow = Number(cachedRowValue);
+  if (!Number.isInteger(cachedRow) || cachedRow < 2 || cachedRow > lastRow) return null;
+  const rowValues = sheet.getRange(cachedRow, 1, 1, 4).getValues()[0];
+  if (String(rowValues[0] || '').toLowerCase() !== targetLower || normalizeSheetDateKey_(rowValues[1]) !== dateKey) {
+    return null;
+  }
+  return {
+    row: cachedRow,
+    usedCount: Math.max(0, Math.floor(Number(rowValues[2]) || 0))
+  };
+}
+
+function getOrInitDailyQuotaRow_(username, dateKey, cache) {
   ensureAdminSchema_();
+  const activeCache = cache || CacheService.getScriptCache();
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('DailyQuota');
-  const rows = sheet.getDataRange().getValues().slice(1);
+  const lastRow = sheet.getLastRow();
   const target = String(username || '').toLowerCase();
-  for (let i = 0; i < rows.length; i += 1) {
-    if (String(rows[i][0] || '').toLowerCase() === target && normalizeSheetDateKey_(rows[i][1]) === dateKey) {
-      return {
-        sheet: sheet,
-        row: i + 2,
-        usedCount: Math.max(0, Math.floor(Number(rows[i][2]) || 0))
-      };
+  const hinted = findDailyQuotaRowByHint_(sheet, lastRow, target, dateKey, activeCache.get(quotaRowCacheKey_(username, dateKey)));
+  if (hinted) {
+    return { sheet: sheet, row: hinted.row, usedCount: hinted.usedCount };
+  }
+
+  if (lastRow > 1) {
+    const rows = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+    for (let i = 0; i < rows.length; i += 1) {
+      if (String(rows[i][0] || '').toLowerCase() === target && normalizeSheetDateKey_(rows[i][1]) === dateKey) {
+        const rowNumber = i + 2;
+        const usedCount = Math.max(0, Math.floor(Number(rows[i][2]) || 0));
+        setQuotaCache_(username, dateKey, usedCount, rowNumber, activeCache);
+        return {
+          sheet: sheet,
+          row: rowNumber,
+          usedCount: usedCount
+        };
+      }
     }
   }
+
   const seededUsed = countTodayUsageInSheet_(username, dateKey);
   sheet.appendRow([sheetText_(username), "'" + dateKey, seededUsed, new Date().toISOString()]);
+  const newRow = sheet.getLastRow();
+  setQuotaCache_(username, dateKey, seededUsed, newRow, activeCache);
   return {
     sheet: sheet,
-    row: sheet.getLastRow(),
+    row: newRow,
     usedCount: seededUsed
   };
 }
 
-function getUserQuotaStatus_(username) {
+function getUserQuotaStatus_(username, cache) {
   const dailyLimit = getDailyRequestLimit_();
   const dateKey = getQuotaDateKey_();
+  const activeCache = cache || CacheService.getScriptCache();
+  const statusKey = quotaStatusCacheKey_(username, dateKey);
+  const rowKey = quotaRowCacheKey_(username, dateKey);
+  const cachedEntries = cacheGetMany_(activeCache, [statusKey, rowKey]);
+
+  const cachedRaw = cachedEntries[statusKey];
+  if (cachedRaw !== undefined && cachedRaw !== null && cachedRaw !== '') {
+    const cachedUsed = Number(cachedRaw);
+    if (Number.isInteger(cachedUsed) && cachedUsed >= 0) {
+      return {
+        dailyUsed: cachedUsed,
+        dailyLimit: dailyLimit,
+        remaining: Math.max(0, dailyLimit - cachedUsed),
+        dateKey: dateKey
+      };
+    }
+  }
+
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = spreadsheet && spreadsheet.getSheetByName('DailyQuota');
   let dailyUsed = 0;
-  if (sheet && sheet.getLastRow() > 1) {
-    const rows = sheet.getDataRange().getValues().slice(1);
+  let matchedRow = 0;
+  const lastRow = sheet ? sheet.getLastRow() : 0;
+  if (sheet && lastRow > 1) {
     const target = String(username || '').toLowerCase();
-    const matches = rows.filter(row => String(row[0] || '').toLowerCase() === target && normalizeSheetDateKey_(row[1]) === dateKey);
-    if (matches.length > 0) {
-      dailyUsed = matches.reduce((max, row) => Math.max(max, Math.floor(Number(row[2]) || 0)), 0);
+    const hinted = findDailyQuotaRowByHint_(sheet, lastRow, target, dateKey, cachedEntries[rowKey]);
+    if (hinted) {
+      dailyUsed = hinted.usedCount;
+      matchedRow = hinted.row;
     } else {
-      dailyUsed = countTodayUsageInSheet_(username, dateKey);
+      const rows = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+      let found = false;
+      rows.forEach(function (row, idx) {
+        if (String(row[0] || '').toLowerCase() === target && normalizeSheetDateKey_(row[1]) === dateKey) {
+          found = true;
+          matchedRow = idx + 2;
+          dailyUsed = Math.max(dailyUsed, Math.floor(Number(row[2]) || 0));
+        }
+      });
+      if (!found) {
+        dailyUsed = countTodayUsageInSheet_(username, dateKey);
+      }
     }
   } else {
     dailyUsed = countTodayUsageInSheet_(username, dateKey);
   }
+  setQuotaCache_(username, dateKey, dailyUsed, matchedRow, activeCache);
   return {
     dailyUsed: dailyUsed,
     dailyLimit: dailyLimit,
@@ -241,6 +407,7 @@ function adminManageUser_(request) {
           return { ok: false, message: 'Phải giữ ít nhất một Admin đang hoạt động.' };
         }
         getUsersSheet_().deleteRow(target.row);
+        invalidateUsersIndexCache_();
       } else {
         if (!target) return { ok: false, message: 'Không tìm thấy tài khoản.' };
         const updates = {};
@@ -292,7 +459,9 @@ function recordAiUsageUnlocked_(username, model, inputTokens, outputTokens, requ
   const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Usage');
   const id = sheetText_(requestId);
   if (sheet.getDataRange().getValues().slice(1).some(row => String(row[0]) === id)) return;
-  sheet.appendRow([id, new Date().toISOString(), sheetText_(normalizeUsername_(username)), sheetText_(model), inputTokens, outputTokens]);
+  const normalizedName = normalizeUsername_(username);
+  sheet.appendRow([id, new Date().toISOString(), sheetText_(normalizedName), sheetText_(model), inputTokens, outputTokens]);
+  invalidateQuotaStatusCache_(normalizedName, getQuotaDateKey_());
 }
 
 /** Internal only: call after a real AI provider response. Never accept token counts from the browser.
