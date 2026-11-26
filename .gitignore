@@ -7,5 +7,3 @@ build/
 coverage/
 *.pem
 *.key
-apps-script/
-tests/
