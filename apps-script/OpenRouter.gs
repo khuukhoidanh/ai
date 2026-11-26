@@ -15,20 +15,52 @@ const OPENROUTER_MODELS = {
   'deepseek-flash': { id: 'deepseek/deepseek-v4-flash-0731', label: 'DeepSeek V4 Flash 0731', free: false }
 };
 
-function quotaIdempotencyKey_(username, clientRequestId) {
+const QUOTA_RESERVATION_TTL_MS = 360000;
+
+function normalizeClientRequestId_(clientRequestId) {
   if (typeof clientRequestId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}$/.test(clientRequestId)) {
     return '';
   }
-  return 'ai:idemp:' + sha256Hex_(String(username || '').toLowerCase() + ':' + clientRequestId);
+  return clientRequestId;
 }
 
-function quotaInFlightKey_(username, dateKey) {
-  return 'ai:inflight:' + dateKey + ':' + String(username || '').toLowerCase();
+function quotaIdempotencyKey_(username, clientRequestId) {
+  const validId = normalizeClientRequestId_(clientRequestId);
+  if (!validId) return '';
+  return 'ai:idemp:' + sha256Hex_(String(username || '').toLowerCase() + ':' + validId);
 }
 
-function readInFlightCount_(cache, key) {
-  const n = Number(cache.get(key));
-  return Number.isInteger(n) && n > 0 ? n : 0;
+function getQuotaReservationsSheet_() {
+  ensureAdminSchema_();
+  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName('QuotaReservations');
+}
+
+function findReservationRow_(sheet, reservationId) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return null;
+  const rows = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+  for (let i = 0; i < rows.length; i += 1) {
+    if (String(rows[i][0] || '') === reservationId) {
+      return { rowNumber: i + 2, values: rows[i] };
+    }
+  }
+  return null;
+}
+
+function pruneOldQuotaReservations_(sheet, currentDateKey, nowMs) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 51) return;
+  const rows = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const status = String(rows[i][4] || '');
+    const rowDateKey = normalizeSheetDateKey_(rows[i][2]);
+    const expiresAtMs = Date.parse(String(rows[i][5] || ''));
+    const isOldClosed = status !== 'PENDING' && rowDateKey !== currentDateKey;
+    const isLongExpired = status === 'EXPIRED' && !Number.isNaN(expiresAtMs) && (nowMs - expiresAtMs > 3600000);
+    if (isOldClosed || isLongExpired) {
+      sheet.deleteRow(i + 2);
+    }
+  }
 }
 
 function aiChat_(request) {
@@ -36,17 +68,22 @@ function aiChat_(request) {
   let reservedReleased = false;
   let reservedUsername = '';
   let reservedDateKey = '';
+  let reservationId = '';
   let idempKey = '';
+  let validClientRequestId = '';
 
   function rollbackReservation_() {
     if (!reserved || reservedReleased) return;
     reservedReleased = true;
     return withAdminLock_(function () {
       const cache = CacheService.getScriptCache();
-      const inFlightKey = quotaInFlightKey_(reservedUsername, reservedDateKey);
-      const nextInFlight = Math.max(0, readInFlightCount_(cache, inFlightKey) - 1);
-      if (nextInFlight > 0) cache.put(inFlightKey, String(nextInFlight), 75);
-      else cache.remove(inFlightKey);
+      if (reservationId) {
+        const resSheet = getQuotaReservationsSheet_();
+        const found = findReservationRow_(resSheet, reservationId);
+        if (found && String(found.values[4] || '') === 'PENDING') {
+          resSheet.getRange(found.rowNumber, 5).setValue('ROLLED_BACK');
+        }
+      }
       if (idempKey) cache.remove(idempKey);
 
       const rowInfo = getOrInitDailyQuotaRow_(reservedUsername, reservedDateKey, cache);
@@ -93,7 +130,8 @@ function aiChat_(request) {
     }
 
     reservedUsername = session.user.username;
-    idempKey = quotaIdempotencyKey_(reservedUsername, request && request.clientRequestId);
+    validClientRequestId = normalizeClientRequestId_(request && request.clientRequestId);
+    idempKey = quotaIdempotencyKey_(reservedUsername, validClientRequestId);
 
     const reserveOutcome = withAdminLock_(function () {
       const cache = CacheService.getScriptCache();
@@ -105,9 +143,6 @@ function aiChat_(request) {
             if (cached && cached.status === 'DONE' && cached.response) {
               return { type: 'CACHED', response: cached.response };
             }
-            if (cached && cached.status === 'PENDING') {
-              return { type: 'PENDING' };
-            }
           } catch (e) {}
         }
       }
@@ -115,10 +150,51 @@ function aiChat_(request) {
       reservedDateKey = getQuotaDateKey_();
       const dailyLimit = getDailyRequestLimit_();
       const rowInfo = getOrInitDailyQuotaRow_(reservedUsername, reservedDateKey, cache);
-      const inFlightKey = quotaInFlightKey_(reservedUsername, reservedDateKey);
-      const inFlight = readInFlightCount_(cache, inFlightKey);
+      const resSheet = getQuotaReservationsSheet_();
+      const nowMs = Date.now();
+      const targetUser = reservedUsername.toLowerCase();
+      let activeInFlight = 0;
 
-      if (rowInfo.usedCount + inFlight >= dailyLimit) {
+      const lastResRow = resSheet.getLastRow();
+      if (lastResRow > 1) {
+        const resRows = resSheet.getRange(2, 1, lastResRow - 1, 8).getValues();
+        for (let i = 0; i < resRows.length; i += 1) {
+          const row = resRows[i];
+          const rowUser = String(row[1] || '').toLowerCase();
+          const rowDateKey = normalizeSheetDateKey_(row[2]);
+          const rowReqId = normalizeSheetDateKey_(row[3]);
+          let rowStatus = String(row[4] || '');
+          const expiresAtMs = Date.parse(String(row[5] || ''));
+
+          if (rowStatus === 'PENDING' && !Number.isNaN(expiresAtMs) && expiresAtMs <= nowMs) {
+            rowStatus = 'EXPIRED';
+            resSheet.getRange(i + 2, 5).setValue('EXPIRED');
+          }
+
+          if (rowUser !== targetUser) continue;
+
+          if (validClientRequestId && rowReqId === validClientRequestId) {
+            if (rowStatus === 'DONE' && row[7]) {
+              try {
+                const storedResponse = JSON.parse(String(row[7]));
+                if (storedResponse && storedResponse.ok) {
+                  if (idempKey) cache.put(idempKey, JSON.stringify({ status: 'DONE', response: storedResponse }), 600);
+                  return { type: 'CACHED', response: storedResponse };
+                }
+              } catch (e) {}
+            }
+            if (rowStatus === 'PENDING') {
+              return { type: 'PENDING' };
+            }
+          }
+
+          if (rowStatus === 'PENDING' && rowDateKey === reservedDateKey) {
+            activeInFlight += 1;
+          }
+        }
+      }
+
+      if (rowInfo.usedCount + activeInFlight >= dailyLimit) {
         return {
           type: 'QUOTA_EXCEEDED',
           dailyUsed: rowInfo.usedCount,
@@ -127,11 +203,19 @@ function aiChat_(request) {
         };
       }
 
-      cache.put(inFlightKey, String(inFlight + 1), 75);
-      if (idempKey) {
-        cache.put(idempKey, JSON.stringify({ status: 'PENDING' }), 75);
-      }
-      return { type: 'RESERVED', dailyLimit: dailyLimit };
+      pruneOldQuotaReservations_(resSheet, reservedDateKey, nowMs);
+      const newReservationId = Utilities.getUuid();
+      resSheet.appendRow([
+        newReservationId,
+        sheetText_(reservedUsername),
+        "'" + reservedDateKey,
+        validClientRequestId ? sheetText_(validClientRequestId) : '',
+        'PENDING',
+        new Date(nowMs + QUOTA_RESERVATION_TTL_MS).toISOString(),
+        new Date(nowMs).toISOString(),
+        ''
+      ]);
+      return { type: 'RESERVED', reservationId: newReservationId, dailyLimit: dailyLimit };
     });
 
     if (reserveOutcome.type === 'CACHED') {
@@ -152,6 +236,7 @@ function aiChat_(request) {
     }
 
     reserved = true;
+    reservationId = reserveOutcome.reservationId;
 
     const candidates = [
       model,
@@ -251,11 +336,6 @@ function aiChat_(request) {
     reservedReleased = true;
     const finalized = withAdminLock_(function () {
       const cache = CacheService.getScriptCache();
-      const inFlightKey = quotaInFlightKey_(reservedUsername, reservedDateKey);
-      const nextInFlight = Math.max(0, readInFlightCount_(cache, inFlightKey) - 1);
-      if (nextInFlight > 0) cache.put(inFlightKey, String(nextInFlight), 75);
-      else cache.remove(inFlightKey);
-
       const rowInfo = getOrInitDailyQuotaRow_(reservedUsername, reservedDateKey, cache);
       const newUsed = rowInfo.usedCount + 1;
       const limit = getDailyRequestLimit_();
@@ -272,6 +352,17 @@ function aiChat_(request) {
         dailyLimit: limit,
         remaining: Math.max(0, limit - newUsed)
       };
+      if (reservationId) {
+        const resSheet = getQuotaReservationsSheet_();
+        const found = findReservationRow_(resSheet, reservationId);
+        if (found) {
+          const serialized = JSON.stringify(res);
+          resSheet.getRange(found.rowNumber, 5).setValue('DONE');
+          if (serialized.length <= 45000) {
+            resSheet.getRange(found.rowNumber, 8).setValue(serialized);
+          }
+        }
+      }
       if (idempKey) {
         cache.put(idempKey, JSON.stringify({ status: 'DONE', response: res }), 600);
       }

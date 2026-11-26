@@ -36,7 +36,8 @@ function ensureAdminSchema_() {
     ['Usage', ['requestId', 'timestamp', 'username', 'model', 'inputTokens', 'outputTokens']],
     ['Audit', ['timestamp', 'actor', 'action', 'target']],
     ['DailyQuota', ['username', 'dateKey', 'usedCount', 'updatedAt']],
-    ['DiscordAccounts', ['discordId', 'username', 'createdAt']]
+    ['DiscordAccounts', ['discordId', 'username', 'createdAt']],
+    ['QuotaReservations', ['reservationId', 'username', 'dateKey', 'clientRequestId', 'status', 'expiresAt', 'createdAt', 'responseJson']]
   ].forEach(function (definition) {
     let target = spreadsheet.getSheetByName(definition[0]);
     if (!target) target = spreadsheet.insertSheet(definition[0]);
@@ -425,8 +426,7 @@ function adminManageUser_(request) {
         } else if (operation === 'resetPassword') {
           validatePassword_(request.password);
           if (request.password.length < 8) return { ok: false, message: 'Mật khẩu cần ít nhất 8 ký tự.' };
-          const salt = randomHex_(16);
-          updates.password = 'v1$' + AUTH_CONFIG.passwordIterations + '$' + salt + '$' + hashPassword_(request.password, salt);
+          updates.password = formatStoredPassword_(request.password);
         } else if (operation !== 'revokeSessions') {
           return { ok: false, message: 'Thao tác không hợp lệ.' };
         }

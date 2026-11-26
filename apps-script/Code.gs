@@ -5,7 +5,9 @@
  */
 const AUTH_CONFIG = {
   usersSheetName: 'Users',
-  passwordIterations: 12000,
+  passwordIterations: 120000,
+  minPasswordIterations: 12000,
+  maxPasswordIterations: 1000000,
   sessionTtlSeconds: 21600,
   usersIndexTtlSeconds: 300,
   lastLoginCacheTtlSeconds: 21600,
@@ -14,10 +16,14 @@ const AUTH_CONFIG = {
   maxUsernameLength: 64,
   maxPasswordLength: 256,
   maxLoginAttempts: 5,
-  loginLockSeconds: 300
+  loginLockSeconds: 300,
+  maxLoginBackoffSeconds: 3600,
+  globalMaxLoginFailures: 25,
+  globalLoginWindowSeconds: 300
 };
 
 const USERS_INDEX_CACHE_KEY = 'auth:usersIndex:v1';
+const GLOBAL_LOGIN_FAIL_CACHE_KEY = 'auth:fail:global:v1';
 
 function doGet() {
   return jsonResponse_({ ok: true, service: 'Chatbot authentication API' });
@@ -98,8 +104,7 @@ function createUserRecord_(username, password, role) {
     throw new Error('A user with that username already exists.');
   }
 
-  const salt = randomHex_(16);
-  const storedPassword = 'v1$' + AUTH_CONFIG.passwordIterations + '$' + salt + '$' + hashPassword_(password, salt);
+  const storedPassword = formatStoredPassword_(password);
   const record = { username: normalizedUsername, password: storedPassword, role: normalizedRole,
     status: 'active', sessionVersion: Utilities.getUuid(), createdAt: new Date().toISOString(), lastLogin: '' };
   sheet.appendRow(values[0].map(header => record[header] === undefined ? '' : record[header]));
@@ -509,6 +514,58 @@ function loginFailCacheKey_(normalizedUsername) {
   return 'auth:fail:' + sha256Hex_(String(normalizedUsername || '').toLowerCase());
 }
 
+function parseFailState_(rawValue) {
+  if (!rawValue) return { count: 0, lockedUntil: 0 };
+  const asNum = Number(rawValue);
+  if (Number.isFinite(asNum)) {
+    return { count: Math.max(0, Math.floor(asNum)), lockedUntil: 0 };
+  }
+  try {
+    const parsed = JSON.parse(rawValue);
+    return {
+      count: Math.max(0, Math.floor(Number(parsed && parsed.count) || 0)),
+      lockedUntil: Math.max(0, Number(parsed && parsed.lockedUntil) || 0)
+    };
+  } catch (error) {
+    return { count: 0, lockedUntil: 0 };
+  }
+}
+
+function computeLoginLockSeconds_(failCount) {
+  if (failCount < AUTH_CONFIG.maxLoginAttempts) return 0;
+  const exponent = Math.min(6, failCount - AUTH_CONFIG.maxLoginAttempts);
+  return Math.min(AUTH_CONFIG.maxLoginBackoffSeconds, AUTH_CONFIG.loginLockSeconds * Math.pow(2, exponent));
+}
+
+function upgradePasswordHashIfNeeded_(username, password, currentHash) {
+  const parts = String(currentHash || '').split('$');
+  const currentIter = Number(parts[1]) || 0;
+  if (currentIter >= AUTH_CONFIG.passwordIterations) return false;
+  try {
+    return withAdminLock_(function () {
+      const sheet = getUsersSheet_();
+      const values = sheet.getDataRange().getValues();
+      if (values.length < 2) return false;
+      const headers = values[0].map(String);
+      const userCol = headers.indexOf('username');
+      const passCol = headers.indexOf('password');
+      if (userCol < 0 || passCol < 0) return false;
+      const targetLower = String(username || '').toLowerCase();
+      for (let i = 1; i < values.length; i += 1) {
+        if (String(values[i][userCol] || '').toLowerCase() === targetLower) {
+          const latestIter = Number(String(values[i][passCol] || '').split('$')[1]) || 0;
+          if (latestIter >= AUTH_CONFIG.passwordIterations) return false;
+          sheet.getRange(i + 1, passCol + 1).setValue(formatStoredPassword_(password));
+          return true;
+        }
+      }
+      return false;
+    });
+  } catch (error) {
+    return false;
+  }
+}
+
 function login(username, password) {
   try {
     const t0 = Date.now();
@@ -516,9 +573,15 @@ function login(username, password) {
     validatePassword_(password);
     const cache = CacheService.getScriptCache();
     const failKey = loginFailCacheKey_(normalizedUsername);
-    const cached = cacheGetMany_(cache, [failKey, USERS_INDEX_CACHE_KEY]);
-    const failCount = Number(cached[failKey]) || 0;
-    if (failCount >= AUTH_CONFIG.maxLoginAttempts) {
+    const cached = cacheGetMany_(cache, [failKey, GLOBAL_LOGIN_FAIL_CACHE_KEY, USERS_INDEX_CACHE_KEY]);
+    const failState = parseFailState_(cached[failKey]);
+    const globalFailCount = Math.max(0, Math.floor(Number(cached[GLOBAL_LOGIN_FAIL_CACHE_KEY]) || 0));
+    const nowMs = Date.now();
+
+    if (globalFailCount >= AUTH_CONFIG.globalMaxLoginFailures) {
+      return { ok: false, code: 'TOO_MANY_ATTEMPTS', message: 'Hệ thống đang tạm giới hạn đăng nhập do quá nhiều yêu cầu sai. Vui lòng thử lại sau 5 phút.' };
+    }
+    if ((failState.lockedUntil > nowMs) || (failState.lockedUntil === 0 && failState.count >= AUTH_CONFIG.maxLoginAttempts)) {
       return { ok: false, code: 'TOO_MANY_ATTEMPTS', message: 'Bạn đã nhập sai quá nhiều lần. Vui lòng thử lại sau 5 phút.' };
     }
 
@@ -527,16 +590,23 @@ function login(username, password) {
     const record = found && found.record;
     // Use a generic failure message to avoid disclosing whether a username exists.
     if (!record || record.status === 'disabled' || !verifyPassword_(password, String(record.password || ''))) {
-      const nextFails = failCount + 1;
-      cache.put(failKey, String(nextFails), AUTH_CONFIG.loginLockSeconds);
-      if (nextFails >= AUTH_CONFIG.maxLoginAttempts) {
+      const nextFails = failState.count + 1;
+      const lockSeconds = computeLoginLockSeconds_(nextFails);
+      const nextLockedUntil = lockSeconds > 0 ? nowMs + lockSeconds * 1000 : 0;
+      const failTtl = Math.max(AUTH_CONFIG.loginLockSeconds, lockSeconds || AUTH_CONFIG.loginLockSeconds);
+      const failWrites = {};
+      failWrites[failKey] = JSON.stringify({ count: nextFails, lockedUntil: nextLockedUntil });
+      cachePutMany_(cache, failWrites, failTtl);
+      cache.put(GLOBAL_LOGIN_FAIL_CACHE_KEY, String(globalFailCount + 1), AUTH_CONFIG.globalLoginWindowSeconds);
+      if (lockSeconds > 0) {
         return { ok: false, code: 'TOO_MANY_ATTEMPTS', message: 'Bạn đã nhập sai quá nhiều lần. Vui lòng thử lại sau 5 phút.' };
       }
       return { ok: false, message: 'Username or password is incorrect.' };
     }
     const tVerify = Date.now();
 
-    if (failCount > 0) cache.remove(failKey);
+    if (failState.count > 0) cache.remove(failKey);
+    upgradePasswordHashIfNeeded_(record.username, password, record.password);
     const matchedUsername = record.username;
     const role = normalizeRole_(String(record.role || 'standard'));
     const token = randomHex_(32);
@@ -767,8 +837,9 @@ function sha256Words_(bytes) {
   return state;
 }
 
-// PBKDF2-HMAC-SHA-256 (RFC 8018), computed in pure JS to avoid 12,000 Apps Script service-bridge calls.
-function hashPassword_(password, saltHex) {
+// PBKDF2-HMAC-SHA-256 (RFC 8018), computed in pure JS to avoid Apps Script service-bridge calls.
+function hashPassword_(password, saltHex, iterations) {
+  const iterCount = Number.isInteger(iterations) && iterations >= 1 ? iterations : AUTH_CONFIG.passwordIterations;
   const keyRaw = utf8Bytes_(password);
   const keyBlock = new Uint8Array(64);
   if (keyRaw.length > 64) {
@@ -820,7 +891,7 @@ function hashPassword_(password, saltHex) {
   sha256Compress_(u, w);
 
   const result = new Int32Array(u);
-  for (let iteration = 1; iteration < AUTH_CONFIG.passwordIterations; iteration += 1) {
+  for (let iteration = 1; iteration < iterCount; iteration += 1) {
     state.set(ipadState);
     w.fill(0, 0, 16);
     for (let i = 0; i < 8; i += 1) w[i] = u[i];
@@ -845,12 +916,27 @@ function hashPassword_(password, saltHex) {
   return hex;
 }
 
+function formatStoredPassword_(password, iterations) {
+  const iterCount = Number.isInteger(iterations) && iterations >= AUTH_CONFIG.minPasswordIterations
+    ? iterations
+    : AUTH_CONFIG.passwordIterations;
+  const salt = randomHex_(16);
+  return 'v1$' + iterCount + '$' + salt + '$' + hashPassword_(password, salt, iterCount);
+}
+
 function verifyPassword_(password, storedPassword) {
-  const parts = storedPassword.split('$');
-  if (parts.length !== 4 || parts[0] !== 'v1' || Number(parts[1]) !== AUTH_CONFIG.passwordIterations || !/^[a-f0-9]{32}$/.test(parts[2])) {
+  const parts = String(storedPassword || '').split('$');
+  const iterations = Number(parts[1]);
+  if (parts.length !== 4 ||
+      parts[0] !== 'v1' ||
+      !Number.isInteger(iterations) ||
+      iterations < AUTH_CONFIG.minPasswordIterations ||
+      iterations > AUTH_CONFIG.maxPasswordIterations ||
+      !/^[a-f0-9]{32}$/.test(parts[2]) ||
+      !/^[a-f0-9]{64}$/.test(parts[3])) {
     return false;
   }
-  return constantTimeEquals_(hashPassword_(password, parts[2]), parts[3]);
+  return constantTimeEquals_(hashPassword_(password, parts[2], iterations), parts[3]);
 }
 
 function constantTimeEquals_(left, right) {

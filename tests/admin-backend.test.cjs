@@ -67,7 +67,7 @@ test('three roles, legacy migration, protected endpoints and no password disclos
   assert.equal(JSON.stringify(result).includes('password-123'), false);
   assert.equal(JSON.stringify(result).includes('v1$'), false);
   assert.equal(result.users.some(user => Object.hasOwn(user, 'password') || Object.hasOwn(user, 'sessionVersion')), false);
-  assert.match(b.sheets.get('Users').rows[2][1], /^v1\$12000\$/);
+  assert.match(b.sheets.get('Users').rows[2][1], /^v1\$120000\$/);
   b.sheets.get('Users').rows[2][2] = 'user';
   b.context.setupAdminSheets();
   assert.equal(b.sheets.get('Users').rows[2][2], 'standard');
@@ -493,8 +493,159 @@ test('pure-JS PBKDF2-HMAC-SHA-256 matches Node crypto.pbkdf2Sync across ASCII, l
     'a-very-long-password-exceeding-the-64-byte-hmac-sha256-block-size-to-force-key-hashing-1234567890'
   ];
   for (const pwd of samples) {
-    const expected = crypto.pbkdf2Sync(pwd, Buffer.from(saltHex, 'hex'), 12000, 32, 'sha256').toString('hex');
-    const actual = b.context.hashPassword_(pwd, saltHex);
-    assert.equal(actual, expected);
+    const expected12k = crypto.pbkdf2Sync(pwd, Buffer.from(saltHex, 'hex'), 12000, 32, 'sha256').toString('hex');
+    assert.equal(b.context.hashPassword_(pwd, saltHex, 12000), expected12k);
+    const expected120k = crypto.pbkdf2Sync(pwd, Buffer.from(saltHex, 'hex'), 120000, 32, 'sha256').toString('hex');
+    assert.equal(b.context.hashPassword_(pwd, saltHex), expected120k);
   }
+});
+
+test('F-01: global login failure ceiling blocks multi-username password spraying and applies backoff', () => {
+  const b = backend();
+  for (let i = 0; i < 6; i += 1) {
+    b.manage({ operation: 'create', username: 'user' + i, password: 'correct-password', role: 'standard' });
+  }
+
+  // Spread 25 failed attempts across 6 different usernames (never hitting 5 on any single username!).
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const uname = 'user' + (attempt % 6);
+    const res = b.context.login(uname, 'wrong-password-' + attempt);
+    assert.equal(res.ok, false);
+    if (attempt < 24) {
+      assert.notEqual(res.code, 'TOO_MANY_ATTEMPTS');
+    }
+  }
+
+  // 26th attempt on a completely fresh username is blocked by the global login failure limit.
+  const blocked = b.context.login('user5', 'correct-password');
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.code, 'TOO_MANY_ATTEMPTS');
+
+  // Exponential backoff calculation grows with repeated failures past maxLoginAttempts.
+  assert.equal(b.context.computeLoginLockSeconds_(5), 300);
+  assert.equal(b.context.computeLoginLockSeconds_(6), 600);
+  assert.equal(b.context.computeLoginLockSeconds_(7), 1200);
+});
+
+test('F-02: legacy v1$12000 password hashes verify and automatically upgrade to v1$120000 on login', () => {
+  const b = backend();
+  b.manage({ operation: 'create', username: 'legacyuser', password: 'legacy-password-123', role: 'standard' });
+  const usersSheet = b.sheets.get('Users');
+  const saltHex = 'abcdef0123456789abcdef0123456789';
+  const legacyHash = crypto.pbkdf2Sync('legacy-password-123', Buffer.from(saltHex, 'hex'), 12000, 32, 'sha256').toString('hex');
+  usersSheet.rows[2][1] = 'v1$12000$' + saltHex + '$' + legacyHash;
+
+  const firstLogin = b.context.login('legacyuser', 'legacy-password-123');
+  assert.equal(firstLogin.ok, true);
+  assert.match(usersSheet.rows[2][1], /^v1\$120000\$/);
+
+  const secondLogin = b.context.login('legacyuser', 'legacy-password-123');
+  assert.equal(secondLogin.ok, true);
+  assert.equal(b.context.login('legacyuser', 'wrong-password').ok, false);
+});
+
+test('F-03: durable QuotaReservations enforce concurrency and idempotency even if CacheService is wiped, and reconcile expired slots', () => {
+  const sheets = new Map();
+  class Sheet {
+    constructor() { this.rows = []; }
+    getLastRow() { return this.rows.length; }
+    appendRow(row) { this.rows.push([...row]); }
+    deleteRow(row) { this.rows.splice(row - 1, 1); }
+    setFrozenRows() {}
+    getDataRange() {
+      const width = Math.max(1, ...this.rows.map(row => row.length));
+      return this.getRange(1, 1, Math.max(1, this.rows.length), width);
+    }
+    getRange(row, col, height = 1, width = 1) {
+      return {
+        getValues: () => Array.from({ length: height }, (_, i) => Array.from({ length: width }, (_, j) => this.rows[row - 1 + i]?.[col - 1 + j] ?? '')),
+        setValue: value => { this.rows[row - 1] ||= []; this.rows[row - 1][col - 1] = value; },
+        setValues: values => values.forEach((line, i) => line.forEach((value, j) => { this.rows[row - 1 + i] ||= []; this.rows[row - 1 + i][col - 1 + j] = value; }))
+      };
+    }
+  }
+  const spreadsheet = { getSheetByName: name => sheets.get(name), insertSheet: name => { const sheet = new Sheet(); sheets.set(name, sheet); return sheet; } };
+  const cache = new Map();
+  let locked = false;
+  const properties = new Map([
+    ['OPENROUTER_API_KEY', 'sk-or-secret-test-key'],
+    ['DAILY_REQUEST_LIMIT', '1']
+  ]);
+
+  let concurrentHook = null;
+  const context = vm.createContext({
+    console: { error() {} },
+    SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet },
+    LockService: { getScriptLock: () => ({ waitLock() { assert.equal(locked, false); locked = true; }, releaseLock() { locked = false; } }) },
+    CacheService: { getScriptCache: () => ({ put: (k, v) => cache.set(k, v), putAll: entries => Object.entries(entries).forEach(([k, v]) => cache.set(k, v)), get: k => cache.get(k), getAll: keys => Object.fromEntries(keys.filter(k => cache.has(k)).map(k => [k, cache.get(k)])), remove: k => cache.delete(k) }) },
+    PropertiesService: { getScriptProperties: () => ({ getProperty: k => properties.get(k) }) },
+    ContentService: { MimeType: { JSON: 'application/json' }, createTextOutput: text => ({ text, setMimeType() { return this; } }) },
+    UrlFetchApp: {
+      fetch() {
+        if (concurrentHook) {
+          const hook = concurrentHook;
+          concurrentHook = null;
+          hook();
+        }
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify({
+            id: 'gen-durable-1',
+            model: 'google/gemma-4-26b-a4b-it:free',
+            choices: [{ message: { content: 'Durable reply' } }],
+            usage: { prompt_tokens: 10, completion_tokens: 20 }
+          })
+        };
+      }
+    },
+    Utilities: {
+      getUuid: () => crypto.randomUUID(),
+      newBlob: text => ({ getBytes: () => [...Buffer.from(text)] }),
+      computeHmacSha256Signature: (data, key) => [...crypto.createHmac('sha256', Buffer.from(key)).update(Buffer.from(data)).digest()],
+      computeDigest: (_, text) => [...crypto.createHash('sha256').update(text).digest()],
+      DigestAlgorithm: { SHA_256: 'sha256' }
+    }
+  });
+  for (const name of ['Code.gs', 'Admin.gs', 'OpenRouter.gs']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../apps-script', name), 'utf8'), context);
+  context.setupAdminSheets();
+  context.createUser('owner', 'test-password', 'Admin');
+  const token = context.login('owner', 'test-password').token;
+  const call = data => JSON.parse(context.doPost({ postData: { contents: JSON.stringify(data) } }).text);
+
+  // Seed an already-expired PENDING reservation in QuotaReservations to confirm stale slots are reclaimed.
+  const resSheet = sheets.get('QuotaReservations');
+  const todayKey = context.getQuotaDateKey_();
+  resSheet.appendRow(['stale-1', 'owner', "'" + todayKey, 'stale-req-1', 'PENDING', new Date(Date.now() - 10000).toISOString(), new Date(Date.now() - 400000).toISOString(), '']);
+
+  const reqId = 'req-' + crypto.randomUUID();
+  let concurrentBlocked = null;
+  let duplicatePending = null;
+  const sessionKeyHash = [...crypto.createHash('sha256').update(token).digest()].map(v => (v & 255).toString(16).padStart(2, '0')).join('');
+  const savedSessionValue = cache.get('auth:' + sessionKeyHash);
+
+  concurrentHook = () => {
+    // Wipe CacheService mid-flight (preserving only the login session token) to simulate eviction!
+    cache.clear();
+    cache.set('auth:' + sessionKeyHash, savedSessionValue);
+    concurrentBlocked = call({ action: 'aiChat', token, modelKey: 'auto', clientRequestId: 'req-' + crypto.randomUUID(), messages: [{ role: 'user', content: '2' }] });
+    duplicatePending = call({ action: 'aiChat', token, modelKey: 'auto', clientRequestId: reqId, messages: [{ role: 'user', content: '1' }] });
+  };
+
+  const first = call({ action: 'aiChat', token, modelKey: 'auto', clientRequestId: reqId, messages: [{ role: 'user', content: '1' }] });
+  assert.equal(first.ok, true);
+  assert.equal(first.dailyUsed, 1);
+  assert.equal(concurrentBlocked.ok, false);
+  assert.equal(concurrentBlocked.code, 'QUOTA_EXCEEDED');
+  assert.equal(duplicatePending.ok, false);
+  assert.equal(duplicatePending.code, 'DUPLICATE_REQUEST');
+  assert.equal(resSheet.rows[1][4], 'EXPIRED');
+  assert.equal(resSheet.rows[2][4], 'DONE');
+
+  // Even after another full cache wipe, duplicate retry with same clientRequestId returns stored DONE response!
+  cache.clear();
+  cache.set('auth:' + sessionKeyHash, savedSessionValue);
+  const retryAfterEviction = call({ action: 'aiChat', token, modelKey: 'auto', clientRequestId: reqId, messages: [{ role: 'user', content: '1' }] });
+  assert.equal(retryAfterEviction.ok, true);
+  assert.equal(retryAfterEviction.reply, 'Durable reply');
+  assert.equal(retryAfterEviction.dailyUsed, 1);
 });

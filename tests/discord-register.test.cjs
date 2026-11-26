@@ -160,7 +160,7 @@ test('Apps Script register verifies Discord membership directly, writes DiscordA
   const usersRows = b.sheets.get('Users').rows;
   assert.equal(usersRows.length, 2);
   assert.equal(usersRows[1][0], 'alice');
-  assert.match(usersRows[1][1], /^v1\$12000\$/);
+  assert.match(usersRows[1][1], /^v1\$120000\$/);
   assert.equal(usersRows[1][2], 'standard');
 
   const discordRows = b.sheets.get('DiscordAccounts').rows;
