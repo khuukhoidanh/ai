@@ -1,5 +1,5 @@
 const OPENROUTER_SYSTEM_PROMPT = [
-  "Always reply in the exact same language as the user's message. If the user writes in Vietnamese, you must reply in clear, natural Vietnamese unless they explicitly ask for another language.",
+  "Always reply in the exact same language as the user's message. If the user writes in Vietnamese, you must reply in 100% clear, natural Vietnamese (standard English technical terms or code identifiers are fine) and NEVER insert Chinese/Hanzi or other CJK characters unless the user explicitly asks for another language or translation.",
   "Format every response using clean, well-structured Markdown so it is easy to scan:",
   "- Use ## and ### headings to separate sections.",
   "- Use **bold** for key terms, labels, and important points, and *italics* for brief notes.",
@@ -244,10 +244,17 @@ function aiChat_(request) {
       { id: 'google/gemma-4-31b-it:free', label: 'Gemma 4 31B', free: true }
     ];
 
+    const userRequestedCjk = messages.some(function (msg) {
+      if (msg.role !== 'user') return false;
+      if (/[\u4E00-\u9FFF\u3400-\u4DBF\u3040-\u30FF\uAC00-\uD7AF]/.test(msg.content)) return true;
+      return /\b(tiếng\s*(trung|hoa|nhật|hàn)|chữ\s*hán|hán\s*tự|chinese|mandarin|cantonese|japanese|korean|kanji|hanzi)\b/i.test(msg.content);
+    });
+
     let response = null;
     let status = 0;
     let data = null;
     let usedModel = model;
+    let fallbackSuccess = null;
 
     for (let c = 0; c < candidates.length; c += 1) {
       usedModel = candidates[c];
@@ -285,11 +292,24 @@ function aiChat_(request) {
       }
 
       if (status >= 200 && status < 300 && data && data.choices && data.choices[0] && data.choices[0].message) {
+        const candidateText = String(data.choices[0].message.content || '');
+        const hasUnexpectedCjk = !userRequestedCjk && /[\u4E00-\u9FFF\u3400-\u4DBF]/.test(candidateText);
+        if (hasUnexpectedCjk && c < candidates.length - 1) {
+          fallbackSuccess = { status: status, data: data, usedModel: usedModel };
+          continue;
+        }
+        fallbackSuccess = null;
         break;
       }
       if (status !== 429 && status !== 502 && status !== 503 && status !== 504 && status !== 404) {
         break;
       }
+    }
+
+    if (fallbackSuccess && (!(status >= 200 && status < 300) || !data || !data.choices || !data.choices[0] || !data.choices[0].message)) {
+      status = fallbackSuccess.status;
+      data = fallbackSuccess.data;
+      usedModel = fallbackSuccess.usedModel;
     }
 
     const metaRaw = data && data.error && data.error.metadata && typeof data.error.metadata.raw === 'string'

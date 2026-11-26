@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '20261126-1';
+  const VERSION = '20261127-5';
 
   if (window.location.href.endsWith('?')) {
     window.history.replaceState(null, '', window.location.href.slice(0, -1));
@@ -37,6 +37,10 @@
       slot.outerHTML = htmlList[index];
     });
 
+    if (window.appI18n && typeof window.appI18n.apply === 'function') {
+      window.appI18n.apply();
+    }
+
     await loadScript('js/admin.js?v=' + VERSION);
     await loadScript('js/app.js?v=' + VERSION);
   }
@@ -44,7 +48,8 @@
   mountViews().catch(function (error) {
     console.error('Failed to initialize views:', error);
     if (typeof window.notifyUser === 'function') {
-      window.notifyUser({ type: 'error', message: 'Không thể tải giao diện ứng dụng. Vui lòng tải lại trang.' });
+      const msg = window.appI18n ? window.appI18n.t('views.initError') : 'Không thể tải giao diện ứng dụng. Vui lòng tải lại trang.';
+      window.notifyUser({ type: 'error', message: msg });
     }
   });
 })();

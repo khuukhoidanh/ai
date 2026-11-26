@@ -1,10 +1,14 @@
 (function () {
   'use strict';
 
+  function msg(key, fallback) {
+    return window.appI18n ? window.appI18n.t(key) : fallback;
+  }
+
   async function request(action, payload, timeoutMs) {
     const url = (window.APP_CONFIG && window.APP_CONFIG.appsScriptUrl || '').trim();
     if (!/^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec$/.test(url)) {
-      throw new Error('Vui lòng cấu hình URL Web App Google Apps Script trong js/config.js.');
+      throw new Error(msg('api.missingUrl', 'Vui lòng cấu hình URL Web App Google Apps Script trong js/config.js.'));
     }
 
     const controller = new AbortController();
@@ -25,8 +29,8 @@
       return result;
     } catch (error) {
       throw new Error(error.name === 'AbortError'
-        ? 'Hệ thống phản hồi quá lâu (timeout). Vui lòng thử lại.'
-        : 'Không thể kết nối hệ thống máy chủ. Hãy kiểm tra URL và quyền truy cập Web App.');
+        ? msg('api.timeout', 'Hệ thống phản hồi quá lâu (timeout). Vui lòng thử lại.')
+        : msg('api.network', 'Không thể kết nối hệ thống máy chủ. Hãy kiểm tra URL và quyền truy cập Web App.'));
     } finally {
       clearTimeout(timeout);
     }

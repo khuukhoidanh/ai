@@ -649,3 +649,54 @@ test('F-03: durable QuotaReservations enforce concurrency and idempotency even i
   assert.equal(retryAfterEviction.reply, 'Durable reply');
   assert.equal(retryAfterEviction.dailyUsed, 1);
 });
+
+test('OpenRouter retries fallback model when auto router leaks unexpected CJK characters in Vietnamese reply', () => {
+  const b = backend();
+  const properties = new Map([
+    ['OPENROUTER_API_KEY', 'sk-or-secret-test-key'],
+    ['DAILY_REQUEST_LIMIT', '10']
+  ]);
+  b.context.PropertiesService = { getScriptProperties: () => ({ getProperty: k => properties.get(k) }) };
+  const requestedModels = [];
+  b.context.UrlFetchApp = {
+    fetch(_url, options) {
+      const payload = JSON.parse(options.payload);
+      requestedModels.push(payload.model);
+      if (payload.model === 'openrouter/free') {
+        const isTranslation = payload.messages.some(m => m.role === 'user' && m.content.includes('tiếng Trung'));
+        return {
+          getResponseCode: () => 200,
+          getContentText: () => JSON.stringify({
+            id: 'gen-cjk-' + requestedModels.length,
+            model: 'nvidia/nemotron-3-super-120b-a12b:free',
+            choices: [{ message: { content: isTranslation ? 'Xin chào là 你好.' : 'Có thể dùng subdomain免费 nhé.' } }],
+            usage: { prompt_tokens: 10, completion_tokens: 12 }
+          })
+        };
+      }
+      return {
+        getResponseCode: () => 200,
+        getContentText: () => JSON.stringify({
+          id: 'gen-clean-' + requestedModels.length,
+          model: 'google/gemma-4-26b-a4b-it:free',
+          choices: [{ message: { content: 'Bạn có thể dùng subdomain miễn phí nhé.' } }],
+          usage: { prompt_tokens: 10, completion_tokens: 12 }
+        })
+      };
+    }
+  };
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../apps-script/OpenRouter.gs'), 'utf8'), b.context);
+
+  // Normal Vietnamese prompt with leaked CJK falls back to Gemma and returns clean Vietnamese.
+  const cleanRes = b.call({ action: 'aiChat', token: b.token, modelKey: 'auto', messages: [{ role: 'user', content: 'Tư vấn giúp mình tạo web' }] });
+  assert.equal(cleanRes.ok, true);
+  assert.equal(cleanRes.reply, 'Bạn có thể dùng subdomain miễn phí nhé.');
+  assert.deepEqual(requestedModels, ['openrouter/free', 'google/gemma-4-26b-a4b-it:free']);
+
+  // Explicit Chinese translation request preserves CJK without unnecessary fallback.
+  requestedModels.length = 0;
+  const translationRes = b.call({ action: 'aiChat', token: b.token, modelKey: 'auto', messages: [{ role: 'user', content: 'Dịch xin chào sang tiếng Trung giúp mình' }] });
+  assert.equal(translationRes.ok, true);
+  assert.equal(translationRes.reply, 'Xin chào là 你好.');
+  assert.deepEqual(requestedModels, ['openrouter/free']);
+});

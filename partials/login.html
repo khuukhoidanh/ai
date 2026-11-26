@@ -1,48 +1,51 @@
-<section id="session-restore-view" class="session-restore-screen" aria-label="Khôi phục phiên đăng nhập">
+<section id="session-restore-view" class="session-restore-screen" aria-label="Khôi phục phiên đăng nhập" data-i18n-aria-label="restore.aria">
   <div class="session-restore-card">
     <span class="session-restore-spinner" aria-hidden="true"></span>
-    <h1>Chatbot AI</h1>
-    <p id="session-restore-message" role="status" aria-live="polite">Đang khôi phục phiên đăng nhập…</p>
+    <h1 data-i18n="restore.title">Chatbot AI</h1>
+    <p id="session-restore-message" role="status" aria-live="polite" data-i18n="restore.checking">Đang khôi phục phiên đăng nhập…</p>
     <div id="session-restore-actions" class="is-hidden">
-      <button id="session-retry" class="admin-button" type="button">Thử lại</button>
-      <button id="session-login" class="admin-button" type="button">Đăng nhập lại</button>
+      <button id="session-retry" class="admin-button" type="button" data-i18n="restore.retry">Thử lại</button>
+      <button id="session-login" class="admin-button" type="button" data-i18n="restore.relogin">Đăng nhập lại</button>
     </div>
   </div>
 </section>
 <main id="login-view" class="login-screen">
   <section class="login-card" aria-labelledby="login-title">
-    <h1 id="login-title">LOGIN PAGE</h1>
-    <div class="auth-tabs" role="tablist" aria-label="Chế độ tài khoản">
-      <button id="auth-tab-login" class="auth-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="login-form">Đăng nhập</button>
-      <button id="auth-tab-register" class="auth-tab" type="button" role="tab" aria-selected="false" aria-controls="register-form">Đăng ký</button>
+    <div class="login-card-top">
+      <button class="lang-switch" type="button" data-lang-toggle aria-label="Đổi ngôn ngữ (Tiếng Việt / English)"><span data-lang-opt="vi">VI</span><span class="lang-sep" aria-hidden="true">/</span><span data-lang-opt="en">EN</span></button>
+    </div>
+    <h1 id="login-title" data-i18n="auth.loginTitle">LOGIN PAGE</h1>
+    <div class="auth-tabs" role="tablist" aria-label="Chế độ tài khoản" data-i18n-aria-label="auth.modeAria">
+      <button id="auth-tab-login" class="auth-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="login-form" data-i18n="auth.tabLogin">Đăng nhập</button>
+      <button id="auth-tab-register" class="auth-tab" type="button" role="tab" aria-selected="false" aria-controls="register-form" data-i18n="auth.tabRegister">Đăng ký</button>
     </div>
     <form id="login-form" novalidate>
-      <label class="sr-only" for="username">Username</label>
-      <input id="username" name="username" autocomplete="username" maxlength="64" placeholder="Username" required>
-      <label class="sr-only" for="password">Password</label>
+      <label class="sr-only" for="username" data-i18n="auth.usernameLabel">Username</label>
+      <input id="username" name="username" autocomplete="username" maxlength="64" placeholder="Username" data-i18n-placeholder="auth.usernamePlaceholder" required>
+      <label class="sr-only" for="password" data-i18n="auth.passwordLabel">Password</label>
       <div class="password-field">
-        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Password" required>
-        <button class="password-toggle" type="button" aria-label="Show password" aria-controls="password" aria-pressed="false">Show</button>
+        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Password" data-i18n-placeholder="auth.passwordPlaceholder" required>
+        <button class="password-toggle" type="button" aria-label="Show password" aria-controls="password" aria-pressed="false" data-i18n="auth.showPassword" data-i18n-aria-label="auth.showPasswordAria">Show</button>
       </div>
-      <button class="login-button" type="submit"><span class="login-spinner" aria-hidden="true"></span><span class="login-button-label">Đăng nhập</span></button>
+      <button class="login-button" type="submit"><span class="login-spinner" aria-hidden="true"></span><span class="login-button-label" data-i18n="auth.loginBtn">Đăng nhập</span></button>
     </form>
     <form id="register-form" class="register-form is-hidden" novalidate>
-      <label class="sr-only" for="reg-discord-id">Discord ID</label>
-      <input id="reg-discord-id" name="discordId" inputmode="numeric" maxlength="20" placeholder="Discord ID (17–20 chữ số)" required>
-      <label class="sr-only" for="reg-username">Username</label>
-      <input id="reg-username" name="username" autocomplete="username" maxlength="64" placeholder="Username" required>
-      <label class="sr-only" for="reg-password">Mật khẩu</label>
+      <label class="sr-only" for="reg-discord-id" data-i18n="auth.discordIdLabel">Discord ID</label>
+      <input id="reg-discord-id" name="discordId" inputmode="numeric" maxlength="20" placeholder="Discord ID (17–20 chữ số)" data-i18n-placeholder="auth.discordIdPlaceholder" required>
+      <label class="sr-only" for="reg-username" data-i18n="auth.usernameLabel">Username</label>
+      <input id="reg-username" name="username" autocomplete="username" maxlength="64" placeholder="Username" data-i18n-placeholder="auth.usernamePlaceholder" required>
+      <label class="sr-only" for="reg-password" data-i18n="auth.passwordLabel">Mật khẩu</label>
       <div class="password-field">
-        <input id="reg-password" name="password" type="password" autocomplete="new-password" maxlength="256" placeholder="Mật khẩu (tối thiểu 8 ký tự)" required>
-        <button class="password-toggle" type="button" aria-label="Show password" aria-controls="reg-password" aria-pressed="false">Show</button>
+        <input id="reg-password" name="password" type="password" autocomplete="new-password" maxlength="256" placeholder="Mật khẩu (tối thiểu 8 ký tự)" data-i18n-placeholder="auth.regPasswordPlaceholder" required>
+        <button class="password-toggle" type="button" aria-label="Show password" aria-controls="reg-password" aria-pressed="false" data-i18n="auth.showPassword" data-i18n-aria-label="auth.showPasswordAria">Show</button>
       </div>
-      <label class="sr-only" for="reg-confirm-password">Xác nhận mật khẩu</label>
+      <label class="sr-only" for="reg-confirm-password" data-i18n="auth.confirmPasswordLabel">Xác nhận mật khẩu</label>
       <div class="password-field">
-        <input id="reg-confirm-password" name="confirmPassword" type="password" autocomplete="new-password" maxlength="256" placeholder="Xác nhận mật khẩu" required>
-        <button class="password-toggle" type="button" aria-label="Show password" aria-controls="reg-confirm-password" aria-pressed="false">Show</button>
+        <input id="reg-confirm-password" name="confirmPassword" type="password" autocomplete="new-password" maxlength="256" placeholder="Xác nhận mật khẩu" data-i18n-placeholder="auth.confirmPasswordPlaceholder" required>
+        <button class="password-toggle" type="button" aria-label="Show password" aria-controls="reg-confirm-password" aria-pressed="false" data-i18n="auth.showPassword" data-i18n-aria-label="auth.showPasswordAria">Show</button>
       </div>
-      <p class="register-note">Bạn cần tham gia máy chủ Discord trước khi đăng ký.</p>
-      <button class="login-button" type="submit"><span class="login-spinner" aria-hidden="true"></span><span class="login-button-label">Đăng ký</span></button>
+      <p class="register-note" data-i18n="auth.registerNote">Bạn cần tham gia máy chủ Discord trước khi đăng ký.</p>
+      <button class="login-button" type="submit"><span class="login-spinner" aria-hidden="true"></span><span class="login-button-label" data-i18n="auth.registerBtn">Đăng ký</span></button>
     </form>
   </section>
 </main>
