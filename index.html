@@ -3,32 +3,241 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#292929">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'">
-  <meta name="description" content="Chatbot AI dành cho người dùng được cấp quyền.">
-  <title>Chatbot AI</title>
+  <meta name="theme-color" content="#ffffff">
+  <meta name="robots" content="noindex, nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <meta name="description" content="Website Under Maintenance — Trang web hiện đang tạm ngưng hoạt động để bảo trì.">
+  <title>Website Under Maintenance</title>
   <link rel="icon" type="image/svg+xml" href="favicon.svg?v=20261125-7">
-  <script>
-    try {
-      if (/^[a-f0-9]{64}$/.test(localStorage.getItem('chatbot.sessionToken') || '')) {
-        document.documentElement.classList.add('restoring-session');
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, Helvetica, sans-serif;
+      color: #111115;
+      background: #fafafd;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      min-height: 100svh;
+      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      padding: max(24px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+      background: radial-gradient(circle at top, #ffffff 0%, #f5f5f9 100%);
+    }
+
+    .maintenance-card {
+      width: min(540px, 100%);
+      padding: 28px 32px 36px;
+      border: 1px solid #e8e8ef;
+      border-radius: 20px;
+      background: #ffffff;
+      box-shadow: 0 12px 36px rgb(17 17 21 / 5%);
+      text-align: center;
+    }
+
+    .card-top {
+      display: flex;
+      justify-content: flex-end;
+      margin-bottom: 12px;
+    }
+
+    .lang-switch {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-height: 30px;
+      padding: 4px 10px;
+      border: 1px solid #e4e4ec;
+      border-radius: 999px;
+      background: #f8f8fb;
+      color: #7a7a85;
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s ease, border-color .15s ease;
+    }
+
+    .lang-switch:hover {
+      background: #efeff5;
+      border-color: #d4d4df;
+    }
+
+    .lang-switch [data-lang-opt].is-active {
+      color: #080808;
+      font-weight: 700;
+    }
+
+    .lang-sep {
+      opacity: .45;
+    }
+
+    .icon-badge {
+      display: inline-grid;
+      place-items: center;
+      width: 56px;
+      height: 56px;
+      margin: 4px auto 16px;
+      border-radius: 16px;
+      background: #080808;
+      color: #facc15;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 12px;
+      border-radius: 999px;
+      border: 1px solid #f3e2b3;
+      background: #fffbeb;
+      color: #8a5a00;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: .2px;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #d97706;
+    }
+
+    h1 {
+      margin: 16px 0 10px;
+      color: #080808;
+      font-size: clamp(24px, 4vw, 32px);
+      font-weight: 750;
+      line-height: 1.25;
+      letter-spacing: -.5px;
+    }
+
+    .subtitle {
+      margin: 0 auto;
+      max-width: 44ch;
+      color: #64646f;
+      font-size: 14.5px;
+      line-height: 1.65;
+    }
+
+    .footnote {
+      margin: 24px 0 0;
+      padding-top: 18px;
+      border-top: 1px solid #efeff4;
+      color: #8f8f99;
+      font-size: 12.5px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 480px) {
+      .maintenance-card {
+        padding: 22px 20px 28px;
+        border-radius: 16px;
       }
-    } catch (error) {}
-  </script>
-  <link rel="stylesheet" href="kits/all.min.css">
-  <link rel="stylesheet" href="style.css?v=20261127-5">
-  <link rel="stylesheet" href="admin.css?v=20261125-3">
+    }
+  </style>
 </head>
 <body>
-  <div data-include="partials/login.html"></div>
-  <div data-include="partials/chat.html"></div>
-  <div data-include="partials/admin.html"></div>
-  <div id="toast" class="toast app-notification" role="status" aria-live="polite" aria-atomic="true"></div>
-  <script src="kits/jquery-4.0.0.slim.min.js"></script>
-  <script src="js/notifications.js"></script>
-  <script src="js/i18n.js?v=20261127-5"></script>
-  <script src="js/config.js"></script>
-  <script src="js/api.js?v=20261127-5"></script>
-  <script src="js/views.js?v=20261127-5"></script>
+  <main class="maintenance-card" aria-labelledby="maintenance-title">
+    <div class="card-top">
+      <button id="lang-toggle" class="lang-switch" type="button" aria-label="Đổi ngôn ngữ (Tiếng Việt / English)">
+        <span data-lang-opt="vi" class="is-active">VI</span>
+        <span class="lang-sep" aria-hidden="true">/</span>
+        <span data-lang-opt="en">EN</span>
+      </button>
+    </div>
+
+    <div class="icon-badge" aria-hidden="true">
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+      </svg>
+    </div>
+
+    <div class="status-pill">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span id="status-text">Tạm ngưng hoạt động</span>
+    </div>
+
+    <h1 id="maintenance-title">Website Under Maintenance</h1>
+
+    <p id="subtitle-text" class="subtitle">
+      Trang web hiện đang được bảo trì và tạm ngưng sử dụng. Cảm ơn bạn đã ghé thăm!
+    </p>
+
+    <p id="footnote-text" class="footnote">
+      Dịch vụ hiện không tiếp nhận yêu cầu mới.
+    </p>
+  </main>
+
+  <script>
+    (function () {
+      'use strict';
+
+      var STORAGE_KEY = 'chatbot.lang';
+      var COPY = {
+        vi: {
+          status: 'Tạm ngưng hoạt động',
+          subtitle: 'Trang web hiện đang được bảo trì và tạm ngưng sử dụng. Cảm ơn bạn đã ghé thăm!',
+          footnote: 'Dịch vụ hiện không tiếp nhận yêu cầu mới.',
+          ariaLabel: 'Đổi ngôn ngữ (Tiếng Việt / English)'
+        },
+        en: {
+          status: 'Under Maintenance',
+          subtitle: 'This website is currently down for maintenance and is no longer in active use. Thank you for visiting!',
+          footnote: 'Service is currently unavailable.',
+          ariaLabel: 'Switch language (Tiếng Việt / English)'
+        }
+      };
+
+      var lang = 'vi';
+      try {
+        if (window.localStorage && window.localStorage.getItem(STORAGE_KEY) === 'en') {
+          lang = 'en';
+        }
+      } catch (e) {}
+
+      var toggleBtn = document.getElementById('lang-toggle');
+      var statusEl = document.getElementById('status-text');
+      var subtitleEl = document.getElementById('subtitle-text');
+      var footnoteEl = document.getElementById('footnote-text');
+
+      function render() {
+        var c = COPY[lang] || COPY.vi;
+        document.documentElement.lang = lang;
+        if (statusEl) statusEl.textContent = c.status;
+        if (subtitleEl) subtitleEl.textContent = c.subtitle;
+        if (footnoteEl) footnoteEl.textContent = c.footnote;
+        if (toggleBtn) {
+          toggleBtn.setAttribute('aria-label', c.ariaLabel);
+          var opts = toggleBtn.querySelectorAll('[data-lang-opt]');
+          for (var i = 0; i < opts.length; i++) {
+            opts[i].classList.toggle('is-active', opts[i].getAttribute('data-lang-opt') === lang);
+          }
+        }
+      }
+
+      if (toggleBtn) {
+        toggleBtn.addEventListener('click', function () {
+          lang = lang === 'vi' ? 'en' : 'vi';
+          try {
+            if (window.localStorage) {
+              window.localStorage.setItem(STORAGE_KEY, lang);
+            }
+          } catch (e) {}
+          render();
+        });
+      }
+
+      render();
+    })();
+  </script>
 </body>
 </html>
